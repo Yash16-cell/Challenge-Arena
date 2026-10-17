@@ -1,62 +1,443 @@
-import { type ReactNode } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ErrorBoundary } from '@/components/error-boundary';
-import { Toaster } from '@/components/ui/toaster';
-import { TooltipProvider } from '@/components/ui/tooltip';
-import NotFound from '@/pages/not-found';
+import { useEffect, useMemo, useState } from 'react';
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
+import { Link, Route, Switch, useLocation, useParams } from 'wouter';
 import {
-  Route,
-  Switch,
-  useLocation,
-  Router as WouterRouter,
-} from 'wouter';
+  ArrowDownRight, ArrowLeft, ArrowRight, BadgeCheck, Brain, CalendarDays, Check,
+  CheckCheck, ChevronRight, CircleHelp, Clock3, Compass, Copy, Dumbbell, Flag, Gauge,
+  Handshake, Lightbulb, LockKeyhole, LogIn, LogOut, Menu, MessageSquareText, MoreHorizontal, Plus, Search,
+  Settings2, Shield, Sparkles, Swords, Target, Trophy, Users, WandSparkles, X, Zap
+} from 'lucide-react';
+import type { Challenge, ChallengeCategory, ChallengeDifficulty, ChallengeInput, ChallengeUpdate, GroupDetail, LeaderboardEntry, Report, ReportReviewInputDecision, ReviewInputDecision, Submission } from '@workspace/api-client-react';
+import {
+  getGetChallengeQueryKey, getGetDashboardQueryKey, getGetGroupQueryKey, getGetLeaderboardQueryKey,
+  getGetProfileQueryKey, getListChallengesQueryKey, getListGroupsQueryKey, getListReviewsQueryKey,
+  getListReportsQueryKey,
+  getListChallengeTemplatesQueryKey, useCreateChallenge, useCreateGroup, useCreateGroupInvitation,
+  useCreateReport, useGetChallenge, useGetDashboard, useGetGroup, useGetLeaderboard, useGetProfile,
+  useJoinGroup, useLeaveGroup, useListChallengeTemplates, useListChallenges, useListGroups,
+  useListReviews, useRemoveGroupMember, useReviewSubmission, useStartChallenge, useSubmitChallenge,
+  useUpdateGroup, useUpdateProfile, useHealthCheck, getHealthCheckQueryKey, useUpdateChallenge,
+  useListReports, useReviewReport
+} from '@workspace/api-client-react';
+import { supabase, authNotConfigured } from '@/lib/supabase';
+import NotFound from '@/pages/not-found';
 
 const queryClient = new QueryClient();
 
-function Home() {
-  return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gray-50">
-      <div className="text-center">
-        <h1 className="text-2xl font-bold text-gray-900">
-          Replit Agent is building...
-        </h1>
-        <p className="mt-2 text-sm text-gray-600">
-          Your app will appear here once it's ready.
-        </p>
-      </div>
+const navItems = [
+  { href: '/dashboard', label: 'Overview', icon: Gauge },
+  { href: '/challenges', label: 'Challenges', icon: Swords },
+  { href: '/groups', label: 'My groups', icon: Users },
+  { href: '/reviews', label: 'Review queue', icon: BadgeCheck },
+  { href: '/reports', label: 'Reports', icon: Flag },
+  { href: '/leaderboard', label: 'Leaderboard', icon: Trophy },
+];
+const categoryIcon: Record<string, typeof Brain> = { brain: Brain, physical: Dumbbell, 'problem-solving': Lightbulb, creativity: WandSparkles, social: Handshake };
+const categoryNames: Record<string, string> = { brain: 'Brain', physical: 'Physical', 'problem-solving': 'Problem solving', creativity: 'Creativity', social: 'Social' };
+const cx = (...classes: (string | false | null | undefined)[]) => classes.filter(Boolean).join(' ');
+const initials = (name?: string) => (name || 'A').trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('').toUpperCase();
+const dateText = (date?: string | null) => date ? new Date(date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : 'No deadline';
+
+function Avatar({ name, image, size = 'md' }: { name?: string; image?: string | null; size?: 'sm' | 'md' | 'lg' }) {
+  const dims = size === 'lg' ? 'h-12 w-12 text-sm' : size === 'sm' ? 'h-7 w-7 text-[10px]' : 'h-9 w-9 text-xs';
+  return image
+    ? <img className={cx('avatar object-cover', dims)} src={image} alt={`${name || 'Member'} avatar`} />
+    : <div className={cx('avatar', dims)} aria-label={`${name || 'Member'} avatar`}>{initials(name)}</div>;
+}
+
+function PageHeading({ eyebrow, title, subtitle, action }: { eyebrow: string; title: string; subtitle?: string; action?: React.ReactNode }) {
+  return <div className="mb-7 flex flex-wrap items-end justify-between gap-4 animate-in">
+    <div><div className="eyebrow mb-2">{eyebrow}</div><h1 className="display text-3xl font-bold tracking-tight text-[#eef3fc] md:text-[2.45rem]">{title}</h1>{subtitle && <p className="mt-2 max-w-2xl text-sm leading-6 text-[#8f9db7]">{subtitle}</p>}</div>
+    {action}
+  </div>;
+}
+
+function StatusMessage({ title, detail, retry }: { title: string; detail?: string; retry?: () => void }) {
+  return <div role="status" className="panel rounded-2xl px-6 py-10 text-center">
+    <div className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl border border-[#7793c4]/20 bg-[#7793c4]/10 text-[#9bb8e9]"><CircleHelp size={21} /></div>
+    <h2 className="text-sm font-bold text-[#e4ebf7]">{title}</h2><p className="mx-auto mt-2 max-w-md text-xs leading-5 text-[#8492ab]">{detail}</p>
+    {retry && <button onClick={retry} className="btn-secondary mt-5" data-testid="button-retry">Try again</button>}
+  </div>;
+}
+
+function SkeletonRows() {
+  return <div className="space-y-3" aria-label="Loading content">{[1, 2, 3].map(i => <div key={i} className="panel flex items-center gap-4 rounded-2xl p-5"><div className="h-10 w-10 animate-pulse rounded-xl bg-[#273653]" /><div className="flex-1"><div className="mb-2 h-3 w-1/3 animate-pulse rounded bg-[#273653]" /><div className="h-2 w-2/3 animate-pulse rounded bg-[#202e49]" /></div></div>)}</div>;
+}
+
+function ChallengeCard({ challenge }: { challenge: Challenge }) {
+  const Icon = categoryIcon[challenge.category] || Target;
+  const progress = challenge.status === 'approved' ? 100 : challenge.status === 'in-progress' ? 42 : challenge.status === 'submitted' ? 82 : 0;
+  return <Link href={`/challenges/${challenge.id}`} className="panel group block rounded-2xl p-5 transition duration-200 hover:-translate-y-0.5 hover:border-[#8eace1]/30 hover:bg-[#192744]" data-testid={`card-challenge-${challenge.id}`}>
+    <div className="mb-4 flex items-start justify-between gap-3">
+      <div className={cx('grid h-10 w-10 place-items-center rounded-xl', `category-${challenge.category}`)}><Icon size={18} /></div>
+      <span className="point-chip"><Zap size={12} />{challenge.points} pts</span>
     </div>
-  );
+    <h3 className="mb-1 text-[15px] font-bold leading-5 text-[#e9effa] group-hover:text-[#a9c8f7]">{challenge.title}</h3>
+    <p className="mb-4 line-clamp-2 text-xs leading-5 text-[#8795af]">{challenge.instructions}</p>
+    <div className="mb-4 flex flex-wrap gap-2"><span className="tag">{categoryNames[challenge.category] || challenge.category}</span><span className="tag capitalize">{challenge.difficulty}</span><span className="tag"><Clock3 size={11} />{challenge.durationMinutes} min</span>{!challenge.isAssigned&&<span className="tag !border-[#d5b56c]/20 !bg-[#d5b56c]/[.07] !text-[#dfc47f]">Not assigned to you</span>}</div>
+    <div className="mb-2 flex items-center justify-between text-[10px] text-[#8492aa]"><span className={challenge.isAssigned?'capitalize':''}>{challenge.isAssigned?challenge.status.replace('-', ' '):'Not assigned'}</span><span>{challenge.participantCount} playing</span></div>
+    <div className="progress-track"><div className="progress-fill transition-all" style={{ width: `${progress}%` }} /></div>
+    <div className="mt-3 flex items-center justify-between text-[10px] text-[#7f8da7]"><span className="flex items-center gap-1"><CalendarDays size={12} />Due {dateText(challenge.deadline)}</span><ChevronRight size={14} className="text-[#7588a8] transition-transform group-hover:translate-x-1" /></div>
+  </Link>;
 }
 
-function Router() {
-  return (
-    // Keep a shared shell (sidebar, navbar) outside the boundary so it
-    // survives a page crash.
-    <RoutedErrorBoundary>
-      <Switch>
-        <Route path="/" component={Home} />
-        <Route component={NotFound} />
-      </Switch>
-    </RoutedErrorBoundary>
-  );
+function AppShell({ children }: { children: React.ReactNode }) {
+  const [path] = useLocation();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const profileQuery = useGetProfile();
+  const health = useHealthCheck({ query: { queryKey: getHealthCheckQueryKey(), staleTime: 60_000 } });
+  const profile = profileQuery.data;
+  const isActive = (href: string) => href === '/dashboard' ? path === href : path.startsWith(href);
+  const links = <>{navItems.map(item => {
+    const Icon = item.icon;
+    return <Link key={item.href} href={item.href} className={cx('nav-link', isActive(item.href) && 'active')} data-testid={`link-nav-${item.label.toLowerCase().replaceAll(' ', '-')}`} onClick={() => setMobileOpen(false)}><Icon size={17} /><span className="side-label">{item.label}</span>{item.label === 'Review queue' && <span className="ml-auto rounded-full bg-[#9e89e4]/20 px-1.5 py-0.5 text-[9px] text-[#c4b5fa]">NEW</span>}</Link>;
+  })}</>;
+  return <div className="arena-shell">
+    <aside className="side-nav desktop-only fixed inset-y-0 left-0 z-30 flex w-[238px] flex-col px-4 py-6">
+      <Link href="/dashboard" className="mb-9 flex items-center gap-3 px-2" data-testid="link-brand">
+        <div className="grid h-9 w-9 place-items-center rounded-xl border border-[#80a8e9]/25 bg-[#80a8e9]/10 text-[#a4c4f4]"><Swords size={19} /></div>
+        <div><div className="display text-[17px] font-bold tracking-tight text-[#eff4fc]">sidequest</div><div className="eyebrow !text-[8px] !tracking-[.19em]">friends, in play</div></div>
+      </Link>
+      <div className="eyebrow mb-3 px-3">Play</div><nav className="space-y-1">{links}</nav>
+      <div className="mt-8 border-t divider pt-6"><div className="eyebrow mb-3 px-3">Your space</div><Link href="/profile" className={cx('nav-link', isActive('/profile') && 'active')} data-testid="link-nav-profile"><Settings2 size={17} /><span className="side-label">Profile & settings</span></Link><Link href="/rules" className={cx('nav-link', isActive('/rules') && 'active')} data-testid="link-nav-rules"><Shield size={17} /><span className="side-label">Community rules</span></Link></div>
+      <div className="mt-auto panel rounded-2xl p-4"><div className="mb-2 flex items-center gap-2 text-[#b9cae7]"><Sparkles size={15} /><span className="text-xs font-bold">Make it memorable</span></div><p className="mb-3 text-[10px] leading-4 text-[#7f8eaa]">The best challenges are the ones your group will still talk about next semester.</p><Link href="/challenges/new" className="text-[10px] font-bold text-[#9cbdf0] hover:text-white">Create a challenge <ArrowRight size={12} className="ml-1 inline" /></Link></div>
+      <Link href="/profile" className="mt-5 flex items-center gap-3 rounded-xl p-2 hover:bg-white/[.04]" data-testid="link-account"><Avatar name={profile?.displayName || 'Your profile'} image={profile?.avatarUrl} /><div className="min-w-0"><div className="truncate text-xs font-bold text-[#dce6f7]">{profile?.displayName || 'Your profile'}</div><div className="text-[10px] text-[#7f8ca4]">{profile ? `${profile.points} points` : 'Account settings'}</div></div><MoreHorizontal className="ml-auto text-[#7786a1]" size={16} /></Link>
+    </aside>
+    {mobileOpen && <div onClick={() => setMobileOpen(false)} className="fixed inset-0 z-40 bg-[#050a16]/70 md:hidden" aria-hidden="true" />}
+    <aside className={cx('side-nav fixed inset-y-0 left-0 z-50 flex w-[270px] flex-col px-4 py-6 transition-transform md:hidden', mobileOpen ? 'translate-x-0' : '-translate-x-full')}>
+      <div className="mb-8 flex items-center justify-between"><Link href="/dashboard" className="flex items-center gap-3" onClick={() => setMobileOpen(false)}><div className="grid h-9 w-9 place-items-center rounded-xl bg-[#80a8e9]/10 text-[#a4c4f4]"><Swords size={19} /></div><span className="display text-lg font-bold">sidequest</span></Link><button className="btn-quiet p-2" onClick={() => setMobileOpen(false)} aria-label="Close menu"><X size={18} /></button></div>
+      <nav className="space-y-1">{links}<Link href="/profile" className="nav-link" onClick={() => setMobileOpen(false)}><Settings2 size={17} />Profile & settings</Link><Link href="/rules" className="nav-link" onClick={() => setMobileOpen(false)}><Shield size={17} />Community rules</Link></nav>
+    </aside>
+    <header className="sticky top-0 z-20 flex h-[62px] items-center justify-between border-b border-[#a3b6dc]/[.08] bg-[#0d1529]/85 px-4 backdrop-blur-xl md:ml-[238px] md:px-8">
+      <button className="btn-quiet rounded-lg p-2 md:hidden" aria-label="Open menu" onClick={() => setMobileOpen(true)}><Menu size={19} /></button>
+      <div className="hidden items-center gap-2 text-[11px] text-[#7f8da7] md:flex"><span>ARENA</span><ChevronRight size={12} /><span className="capitalize text-[#bcc9dd]">{path.split('/')[1]?.replace('-', ' ') || 'home'}</span><span className="ml-2 inline-flex items-center gap-1.5 rounded-full border border-[#8fa9d4]/10 bg-[#8fa9d4]/[.045] px-2 py-1 text-[9px]"><span className={cx('h-1.5 w-1.5 rounded-full',health.isError?'bg-[#d38b8b]':'bg-[#82c7a6]')}/>{health.isError?'reconnecting':'all systems ready'}</span></div>
+      <div className="ml-auto flex items-center gap-3"><Link href="/rules" className="btn-quiet hidden items-center gap-2 rounded-lg px-3 py-2 text-xs md:flex"><CircleHelp size={15} />Help & safety</Link><Link href="/profile" aria-label="Profile settings" className="rounded-full"><Avatar name={profile?.displayName || 'Your profile'} image={profile?.avatarUrl} size="sm" /></Link></div>
+    </header>
+    <main className="page-content min-h-[calc(100dvh-62px)] px-4 py-7 md:ml-[238px] md:px-8 md:py-9"><div className="mx-auto w-full max-w-[1200px]">{children}</div></main>
+    <nav className="mobile-bar fixed inset-x-0 bottom-0 z-30 grid grid-cols-6 px-1 pb-[max(env(safe-area-inset-bottom),.35rem)] pt-2 md:hidden" aria-label="Mobile navigation">
+      {navItems.map(item => { const Icon = item.icon; return <Link key={item.href} href={item.href} className={cx('flex flex-col items-center gap-1 px-0.5 py-1.5 text-[8px] font-semibold', isActive(item.href) ? 'text-[#abc9f5]' : 'text-[#7785a0]')}><Icon size={16} /><span>{item.label === 'Review queue' ? 'Reviews' : item.label === 'My groups' ? 'Groups' : item.label}</span></Link>; })}
+    </nav>
+  </div>;
 }
 
-function RoutedErrorBoundary({ children }: { children: ReactNode }) {
-  const [location] = useLocation();
-  return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>;
+function Landing() {
+  return <div className="min-h-[100dvh] overflow-hidden">
+    <header className="mx-auto flex max-w-[1320px] items-center justify-between px-5 py-5 md:px-10"><Link href="/" className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl border border-[#80a8e9]/25 bg-[#80a8e9]/10 text-[#a4c4f4]"><Swords size={20} /></span><span className="display text-lg font-bold">sidequest</span></Link><div className="flex items-center gap-3"><Link href="/auth/login" className="btn-quiet px-3 py-2 text-sm font-semibold">Log in</Link><Link href="/auth/signup" className="btn-primary">Get your group started <ArrowRight size={15} /></Link></div></header>
+    <main>
+      <section className="relative mx-auto grid min-h-[650px] max-w-[1320px] items-center gap-12 px-5 py-16 md:grid-cols-[1fr_.9fr] md:px-10 md:py-24">
+        <div className="relative z-10 animate-in"><div className="mb-6 inline-flex items-center gap-2 rounded-full border border-[#8faad6]/15 bg-[#93b5ef]/[.06] px-3 py-2 text-[11px] font-semibold text-[#a9bfdf]"><span className="h-1.5 w-1.5 rounded-full bg-[#84d2b0]" />Your campus, a little more legendary</div>
+          <h1 className="display hero-title max-w-[680px] text-[4.45rem] font-bold leading-[.99] text-[#eef3fc] md:text-[5.25rem]">The group chat<br /><span className="text-[#94b9f1]">has a quest now.</span></h1>
+          <p className="mt-7 max-w-[490px] text-[15px] leading-7 text-[#98a7c1]">Sidequest turns “we should do something” into challenges your friends actually finish. Make it yours, keep it safe, and let the group decide what counts.</p>
+          <div className="mt-8 flex flex-wrap gap-3"><Link href="/auth/signup" className="btn-primary px-5 py-3">Build your arena <ArrowRight size={16} /></Link><Link href="/challenges" className="btn-secondary px-5 py-3">Explore challenges</Link></div>
+          <div className="mt-10 flex items-center gap-4 text-[11px] text-[#71809b]"><div className="flex -space-x-2">{['MK','AL','JR','TS'].map((x,i)=><div key={x} className="avatar h-8 w-8 border-2 border-[#111a2d] text-[9px]" style={{background:['#344c74','#514876','#365d62','#714b68'][i]}}>{x}</div>)}</div><span>Made for friends, not strangers on the internet</span></div>
+        </div>
+        <div className="relative mx-auto flex aspect-square w-full max-w-[540px] items-center justify-center animate-in stagger-1">
+          <div className="hero-orbit absolute inset-0 rounded-full opacity-90" />
+          <div className="absolute left-[6%] top-[19%] panel-soft rounded-2xl p-4 shadow-xl" style={{transform:'rotate(-5deg)'}}><div className="eyebrow mb-2">THIS WEEK</div><div className="display text-3xl font-bold text-[#eff4ff]">+240</div><div className="text-[10px] text-[#8e9eb9]">points earned</div></div>
+          <div className="relative z-10 w-[78%] max-w-[370px] rounded-[26px] border border-[#8da9dc]/20 bg-[#111b31]/90 p-5 shadow-2xl shadow-[#050a18]/50 backdrop-blur-xl">
+            <div className="mb-5 flex items-center justify-between"><div><div className="eyebrow mb-1">ACTIVE QUEST</div><div className="text-sm font-bold text-[#e7edf8]">The 5-minute campus tour</div></div><div className="grid h-10 w-10 place-items-center rounded-xl category-social"><Handshake size={19} /></div></div>
+            <p className="mb-5 text-xs leading-5 text-[#8a9ab4]">Show a friend one spot on campus you think everyone should know about.</p><div className="mb-2 flex justify-between text-[10px] text-[#8b99b2]"><span>Group progress</span><span>4 / 6</span></div><div className="progress-track mb-5"><div className="progress-fill" style={{width:'67%'}} /></div>
+            <div className="flex items-center justify-between border-t border-[#a4b7df]/10 pt-4"><div className="flex -space-x-2">{['LM','DR','JW','+2'].map((x,i)=><span key={x} className="avatar h-7 w-7 border-2 border-[#111b31] text-[8px]" style={{background:['#46567b','#5a476f','#3d6a66','#253552'][i]}}>{x}</span>)}</div><span className="point-chip"><Zap size={11} />35 pts</span></div>
+          </div>
+          <div className="absolute bottom-[15%] right-[3%] panel-soft rounded-xl px-4 py-3" style={{transform:'rotate(4deg)'}}><div className="flex items-center gap-2 text-[11px] font-bold text-[#b3c4df]"><CheckCheck size={15} className="text-[#8cd1b0]" />Group vote is in</div><p className="mt-1 pl-6 text-[9px] text-[#7f8da7]">Maya's completion approved</p></div>
+        </div>
+      </section>
+      <section className="border-y border-[#9aafd4]/[.08] bg-[#111a2d]/45 px-5 py-8 md:px-10"><div className="mx-auto grid max-w-[1180px] grid-cols-2 gap-6 text-center md:grid-cols-4"><div><div className="display text-2xl font-bold text-[#e3ebf8]">Your rules</div><div className="mt-1 text-[10px] text-[#7988a3]">Group-first, always</div></div><div><div className="display text-2xl font-bold text-[#e3ebf8]">Real friends</div><div className="mt-1 text-[10px] text-[#7988a3]">Private spaces to play</div></div><div><div className="display text-2xl font-bold text-[#e3ebf8]">Clear points</div><div className="mt-1 text-[10px] text-[#7988a3]">Every award has a reason</div></div><div><div className="display text-2xl font-bold text-[#e3ebf8]">Good stories</div><div className="mt-1 text-[10px] text-[#7988a3]">That's the whole point</div></div></div></section>
+      <section className="mx-auto max-w-[1220px] px-5 py-20 md:px-10 md:py-28"><div className="mb-12 max-w-xl"><div className="eyebrow mb-3">PLAY YOUR WAY</div><h2 className="display text-4xl font-bold text-[#edf2fc] md:text-5xl">A little friendly<br />competition goes far.</h2></div><div className="grid gap-4 md:grid-cols-3">
+        {[{i:Compass,n:'Pick a quest',t:'Choose a group challenge or dream up something original. Your people set the pace, the rules, and what a win looks like.'},{i:MessageSquareText,n:'Show your work',t:'Submit a note or evidence when you finish. Friends review each other, so every point comes with a real moment behind it.'},{i:Trophy,n:'See what happens',t:'Watch the leaderboard shift, celebrate each other, and keep a record of the things you actually did together.'}].map((item,index)=>{const Icon=item.i;return <div key={item.n} className={cx('panel rounded-2xl p-6 md:p-7',`stagger-${index+1}`)}><div className="mb-8 grid h-11 w-11 place-items-center rounded-xl bg-[#83a8e6]/10 text-[#9fbdf0]"><Icon size={20}/></div><h3 className="mb-2 text-base font-bold">{item.n}</h3><p className="text-xs leading-6 text-[#8492ac]">{item.t}</p></div>})}</div></section>
+      <section className="mx-5 mb-16 overflow-hidden rounded-[28px] border border-[#8ca9dd]/15 bg-[linear-gradient(110deg,rgba(27,41,70,.94),rgba(28,32,61,.72))] px-6 py-12 md:mx-auto md:max-w-[1220px] md:px-12 md:py-16"><div className="grid items-center gap-10 md:grid-cols-[1fr_auto]"><div><div className="eyebrow mb-3">MAKE THE FIRST MOVE</div><h2 className="display max-w-2xl text-3xl font-bold leading-tight text-[#eff3fc] md:text-4xl">Start with one good idea.<br />See where your group takes it.</h2><p className="mt-4 max-w-lg text-sm leading-6 text-[#98a5bf]">Create a private group, invite your friends, and make the ordinary stuff count.</p></div><Link href="/auth/signup" className="btn-primary w-fit px-5 py-3">Start your group <ArrowRight size={15}/></Link></div></section>
+      <footer className="mx-auto flex max-w-[1320px] flex-wrap justify-between gap-4 border-t border-[#a3b6dc]/[.08] px-5 py-7 text-[10px] text-[#71809b] md:px-10"><span>Sidequest · Made for campus life</span><div className="flex gap-5"><Link href="/rules" className="hover:text-[#c9d6eb]">Community rules</Link><Link href="/auth/login" className="hover:text-[#c9d6eb]">Log in</Link></div></footer>
+    </main>
+  </div>;
+}
+
+function Dashboard() {
+  const q = useGetDashboard();
+  const profile = q.data?.profile;
+  const challenges = q.data?.challenges || [];
+  if (q.isLoading) return <><PageHeading eyebrow="Your arena" title="Loading your field..." /><SkeletonRows /></>;
+  if (q.isError || !q.data) return <><PageHeading eyebrow="Your arena" title="Your next chapter starts here" /><StatusMessage title="We couldn't load your dashboard" detail="Your profile and activity will show up here as soon as we can reconnect." retry={() => q.refetch()} /></>;
+  const active = challenges.filter(c => c.status !== 'approved' && c.status !== 'expired' && c.status !== 'cancelled').slice(0, 3);
+  return <div>
+    <PageHeading eyebrow="Your arena · ready when you are" title={`Good to see you, ${profile?.displayName?.split(' ')[0] || 'friend'}.`} subtitle="Your group is building momentum. Here's what's in play today." action={<Link href="/challenges/new" className="btn-primary"><Plus size={16}/>New challenge</Link>} />
+    <section className="mb-6 grid gap-4 md:grid-cols-[1.35fr_.8fr_.8fr]">
+      <div className="panel relative overflow-hidden rounded-2xl p-6 md:p-7"><div className="absolute -right-8 -top-9 h-44 w-44 rounded-full border border-[#97b9f1]/10 bg-[#91afe8]/[.035]" /><div className="relative"><div className="eyebrow mb-2">YOUR RUN THIS WEEK</div><div className="display text-4xl font-bold text-[#edf3fc]">{q.data.weeklyPoints}<span className="ml-2 text-sm font-semibold text-[#91a0ba]">pts</span></div><p className="mt-2 text-xs text-[#8594ad]">Keep showing up. The points follow.</p><div className="mt-5 flex items-end gap-1.5">{[23,37,30,59,42,82,65,100,75,88,62,97].map((height,i)=><div key={i} className="flex-1 rounded-t-sm bg-gradient-to-t from-[#526da1]/40 to-[#8eade0]/80" style={{height:`${height*.34}px`,opacity:i===11?1:.48}} />)}</div><div className="mt-2 flex justify-between text-[9px] text-[#72819b]"><span>MON</span><span>WED</span><span>FRI</span><span>SUN</span></div></div></div>
+      <div className="panel rounded-2xl p-6"><div className="eyebrow mb-4">POINTS BANK</div><div className="mb-2 flex items-center gap-2"><Trophy size={17} className="text-[#e2be76]"/><span className="display text-3xl font-bold">{profile?.points ?? 0}</span></div><p className="text-xs text-[#8290aa]">earned across your arena</p><Link href="/leaderboard" className="mt-5 inline-flex items-center gap-1 text-[11px] font-bold text-[#9cbbef]">See leaderboard <ArrowRight size={13}/></Link></div>
+      <div className="panel rounded-2xl p-6"><div className="eyebrow mb-4">YOUR RECORD</div><div className="mb-2 flex items-center gap-2"><Check size={17} className="text-[#8cd1b0]"/><span className="display text-3xl font-bold">{profile?.completedChallenges ?? 0}</span></div><p className="text-xs text-[#8290aa]">challenges approved</p><div className="mt-5 text-[11px] text-[#8795ae]">{profile?.groupsCount ?? 0} groups in your orbit</div></div>
+    </section>
+    <div className="mb-5 flex items-end justify-between"><div><div className="eyebrow mb-1">IN MOTION</div><h2 className="display text-xl font-bold">Your active challenges</h2></div><Link href="/challenges" className="text-xs font-semibold text-[#91b4ed]">Explore all <ArrowRight className="ml-1 inline" size={13}/></Link></div>
+    {active.length ? <div className="mb-8 grid gap-4 lg:grid-cols-3">{active.map(c=><ChallengeCard key={c.id} challenge={c}/>)}</div> : <div className="panel mb-8 rounded-2xl p-7 text-center"><Target className="mx-auto mb-3 text-[#95b5e9]" size={24}/><h3 className="font-bold">Nothing on the board yet</h3><p className="mx-auto mt-2 max-w-sm text-xs leading-5 text-[#8593aa]">Pick a challenge with your crew or create one that only your group could come up with.</p><Link href="/challenges" className="btn-secondary mt-4">Find your first quest</Link></div>}
+    <div className="grid gap-5 lg:grid-cols-[1.1fr_.9fr]">
+      <section className="panel rounded-2xl p-5 md:p-6"><div className="mb-4 flex items-center justify-between"><div><div className="eyebrow mb-1">YOUR CREWS</div><h2 className="display text-lg font-bold">Groups you belong to</h2></div><Link href="/groups" className="text-[11px] font-semibold text-[#94b5ee]">View groups</Link></div>
+        {q.data.groups.length ? <div className="space-y-2">{q.data.groups.slice(0,3).map(g=><Link href={`/groups/${g.id}`} key={g.id} className="flex items-center gap-3 rounded-xl border border-[#9aafd4]/[.08] p-3 hover:bg-white/[.025]"><div className="grid h-9 w-9 place-items-center rounded-lg bg-[#8e78d1]/10 text-[#b3a2ea]"><Users size={16}/></div><div className="min-w-0 flex-1"><div className="truncate text-xs font-bold">{g.name}</div><div className="text-[10px] text-[#7f8da7]">{g.memberCount} members</div></div><ChevronRight size={15} className="text-[#6f809e]"/></Link>)}</div> : <Link href="/groups" className="block rounded-xl border border-dashed border-[#93a8ce]/20 p-5 text-center text-xs text-[#8a9ab5]">Create your first private group</Link>}
+      </section>
+      <section className="panel rounded-2xl p-5 md:p-6"><div className="mb-4 flex items-center justify-between"><div><div className="eyebrow mb-1">FRIEND-POWERED</div><h2 className="display text-lg font-bold">Reviews waiting</h2></div><div className="grid h-9 w-9 place-items-center rounded-xl bg-[#aa91ea]/10 text-[#bdaaf2]"><BadgeCheck size={17}/></div></div><p className="text-xs leading-5 text-[#8795ae]">{q.data.pendingReviews ? `${q.data.pendingReviews} completion${q.data.pendingReviews===1?'':'s'} need a second look from your crew.` : 'Your crew is all caught up on reviews.'}</p><Link href="/reviews" className="btn-secondary mt-4">Open review queue <ArrowRight size={13}/></Link></section>
+    </div>
+  </div>;
+}
+
+function ChallengesPage() {
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('');
+  const [difficulty, setDifficulty] = useState('');
+  const params = useMemo(() => ({ ...(search ? {search} : {}), ...(category ? {category: category as ChallengeCategory} : {}), ...(difficulty ? {difficulty: difficulty as ChallengeDifficulty} : {}) }), [search, category, difficulty]);
+  const q = useListChallenges(params);
+  return <div><PageHeading eyebrow="Pick your next story" title="Challenge board" subtitle="Good ideas, open deadlines, and a crew ready to take them on." action={<Link href="/challenges/new" className="btn-primary"><Plus size={15}/>Create challenge</Link>} />
+    <div className="panel mb-6 rounded-2xl p-4 md:p-5"><div className="grid gap-3 md:grid-cols-[1fr_190px_170px]">
+      <label className="relative"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7f8da7]"/><input aria-label="Search challenges" data-testid="input-challenge-search" className="field pl-10" placeholder="Search titles and ideas..." value={search} onChange={e=>setSearch(e.target.value)}/></label>
+      <select className="field" aria-label="Filter category" data-testid="select-category" value={category} onChange={e=>setCategory(e.target.value)}><option value="">All categories</option>{Object.entries(categoryNames).map(([k,v])=><option value={k} key={k}>{v}</option>)}</select>
+      <select className="field" aria-label="Filter difficulty" data-testid="select-difficulty" value={difficulty} onChange={e=>setDifficulty(e.target.value)}><option value="">Any difficulty</option>{['easy','medium','hard'].map(x=><option key={x} value={x}>{x[0].toUpperCase()+x.slice(1)}</option>)}</select>
+    </div><div className="mt-3 flex flex-wrap items-center gap-2"><span className="eyebrow mr-1">Explore by</span>{Object.entries(categoryNames).map(([k,v])=>{const Icon=categoryIcon[k];return <button key={k} onClick={()=>setCategory(category===k?'':k)} className={cx('tag hover:border-[#91afe3]/30',category===k&&'!border-[#84a9e8]/35 !bg-[#83a5df]/15 !text-[#bdd2f4]')}><Icon size={12}/>{v}</button>})}</div></div>
+    {q.isLoading ? <SkeletonRows/> : q.isError ? <StatusMessage title="Challenges didn't load" detail="Check your connection and try the board again." retry={()=>q.refetch()}/> : q.data?.length ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{q.data.map(c=><ChallengeCard key={c.id} challenge={c}/>)}</div> : <div className="panel rounded-2xl px-6 py-12 text-center"><Compass className="mx-auto mb-4 text-[#96b6ed]" size={28}/><h2 className="display text-xl font-bold">No quests match that search</h2><p className="mx-auto mt-2 max-w-md text-xs leading-5 text-[#8291aa]">Clear a filter or start a challenge that fits your crew.</p><div className="mt-5 flex justify-center gap-3"><button className="btn-secondary" onClick={()=>{setSearch('');setCategory('');setDifficulty('')}}>Clear filters</button><Link href="/challenges/new" className="btn-primary">Create challenge</Link></div></div>}
+    <div className="mt-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[#8eabd8]/10 bg-[#19243d]/55 p-5"><div className="flex items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-[#ae8ce2]/10 text-[#c2a9ef]"><Sparkles size={17}/></div><div><div className="text-sm font-bold">Need a spark?</div><p className="mt-1 text-[11px] text-[#8492ab]">Browse the curated template library for a starting point.</p></div></div><Link href="/challenges/new" className="btn-secondary">Build from a template <ArrowRight size={13}/></Link></div>
+  </div>;
+}
+
+function ChallengeCreate() {
+  const [,setLocation]=useLocation();
+  const queryClient = useQueryClient();
+  const groups = useListGroups();
+  const [groupId,setGroupId]=useState('');
+  const group = useGetGroup(groupId,{query:{enabled:!!groupId,queryKey:getGetGroupQueryKey(groupId)}});
+  const templates = useListChallengeTemplates({ query: { queryKey: getListChallengeTemplatesQueryKey() } });
+  const create = useCreateChallenge();
+  const [selected,setSelected]=useState<string[]>([]);
+  const [error,setError]=useState('');
+  const [template,setTemplate]=useState('');
+  const [form,setForm]=useState({title:'',instructions:'',category:'social',difficulty:'easy',points:'25',durationMinutes:'30',deadline:'',completionMethod:'text',safetyNotes:''});
+  const applyTemplate=(id:string)=>{setTemplate(id);const t=templates.data?.find(item=>item.id===id);if(t)setForm(f=>({...f,title:t.title,instructions:t.instructions,category:t.category,difficulty:t.difficulty,points:String(t.points),durationMinutes:String(t.durationMinutes),completionMethod:t.completionMethod,safetyNotes:t.safetyNotes||''}));};
+  const submit=(e:React.FormEvent)=>{e.preventDefault();setError('');if(!groupId){setError('Choose a group to play in.');return}if(selected.length===0){setError('Select at least one participant.');return}
+    const data:ChallengeInput={groupId,title:form.title.trim(),instructions:form.instructions.trim(),category:form.category as ChallengeCategory,difficulty:form.difficulty as ChallengeDifficulty,points:Number(form.points),durationMinutes:Number(form.durationMinutes),completionMethod:form.completionMethod as ChallengeInput['completionMethod'],safetyNotes:form.safetyNotes.trim(),deadline:form.deadline?new Date(form.deadline).toISOString():null,participantIds:selected};
+    create.mutate({data},{onSuccess:async challenge=>{await Promise.all([queryClient.invalidateQueries({queryKey:getListChallengesQueryKey()}),queryClient.invalidateQueries({queryKey:getGetDashboardQueryKey()}),queryClient.invalidateQueries({queryKey:getGetGroupQueryKey(groupId)})]);setLocation(`/challenges/${challenge.id}`)},onError:()=>setError('We could not create that challenge. Review the details and try again.')});
+  };
+  const members=group.data?.members||[];
+  return <div className="mx-auto max-w-[950px]"><PageHeading eyebrow="Make it yours" title="Create a challenge" subtitle="Set a clear, safe goal. Your group brings it to life." action={<Link href="/challenges" className="btn-secondary"><ArrowLeft size={14}/>Back to board</Link>}/>
+    <form onSubmit={submit} className="grid gap-5 lg:grid-cols-[1fr_300px]"><div className="panel space-y-5 rounded-2xl p-5 md:p-7">
+      <div><label className="label" htmlFor="challenge-title">Challenge title</label><input id="challenge-title" required minLength={3} maxLength={100} className="field" placeholder="A good story starts with..." value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/></div>
+      <div><label className="label" htmlFor="challenge-instructions">What should your group do?</label><textarea id="challenge-instructions" required minLength={10} maxLength={3000} rows={5} className="field resize-y" placeholder="Be specific about the goal and how someone can show they did it." value={form.instructions} onChange={e=>setForm({...form,instructions:e.target.value})}/></div>
+      <div className="grid gap-4 sm:grid-cols-2"><div><label className="label">Category</label><select className="field" value={form.category} onChange={e=>setForm({...form,category:e.target.value})}>{Object.entries(categoryNames).map(([k,v])=><option value={k} key={k}>{v}</option>)}</select></div><div><label className="label">Difficulty</label><select className="field" value={form.difficulty} onChange={e=>setForm({...form,difficulty:e.target.value})}>{['easy','medium','hard'].map(x=><option value={x} key={x}>{x[0].toUpperCase()+x.slice(1)}</option>)}</select></div></div>
+      <div className="grid gap-4 sm:grid-cols-3"><div><label className="label">Points (5–500)</label><input className="field" type="number" min="5" max="500" value={form.points} onChange={e=>setForm({...form,points:e.target.value})}/></div><div><label className="label">Time needed (min)</label><input className="field" type="number" min="1" max="1440" value={form.durationMinutes} onChange={e=>setForm({...form,durationMinutes:e.target.value})}/></div><div><label className="label">Deadline</label><input className="field" type="datetime-local" value={form.deadline} onChange={e=>setForm({...form,deadline:e.target.value})}/></div></div>
+      <div><label className="label">How will people complete it?</label><select className="field" value={form.completionMethod} onChange={e=>setForm({...form,completionMethod:e.target.value})}><option value="confirmation">Simple confirmation</option><option value="text">Written reflection</option><option value="evidence">Evidence link or note</option></select></div>
+      <div><label className="label">Safety notes <span className="font-normal text-[#7787a0]">(optional)</span></label><textarea className="field resize-y" rows={2} maxLength={500} placeholder="Any boundaries or details that help keep this comfortable for everyone." value={form.safetyNotes} onChange={e=>setForm({...form,safetyNotes:e.target.value})}/></div>
+    </div>
+    <div className="space-y-4"><div className="panel rounded-2xl p-5"><div className="eyebrow mb-4">PLAY WITH</div><label className="label">Choose a group</label><select required className="field mb-4" value={groupId} onChange={e=>{setGroupId(e.target.value);setSelected([])}}><option value="">Select your group</option>{groups.data?.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select>
+      {groupId&&<><div className="mb-2 flex items-center justify-between"><span className="label !mb-0">Assign to members</span><button type="button" className="text-[10px] text-[#9ab9ee]" onClick={()=>setSelected(selected.length===members.length?[]:members.map(m=>m.id))}>{selected.length===members.length?'Clear':'Select all'}</button></div>{group.isLoading?<div className="text-xs text-[#8190aa]">Loading group members...</div>:members.length?<div className="max-h-56 space-y-1 overflow-auto">{members.map(m=><label key={m.id} className="flex cursor-pointer items-center gap-3 rounded-xl p-2 hover:bg-white/[.035]"><input type="checkbox" checked={selected.includes(m.id)} onChange={e=>setSelected(e.target.checked?[...selected,m.id]:selected.filter(x=>x!==m.id))}/><Avatar name={m.displayName} image={m.avatarUrl} size="sm"/><span className="min-w-0 flex-1 truncate text-xs">{m.displayName}</span></label>)}</div>:<p className="text-xs text-[#8190aa]">No members found in this group.</p>}</>}
+      {!groups.isLoading&&!groups.data?.length&&<Link href="/groups" className="text-xs text-[#a6c4f2]">Create or join a group first</Link>}
+    </div>
+      <div className="panel rounded-2xl p-5"><div className="eyebrow mb-3">START WITH A TEMPLATE</div><select className="field" value={template} onChange={e=>applyTemplate(e.target.value)}><option value="">Choose a starting point</option>{templates.data?.map(t=><option key={t.id} value={t.id}>{t.title}</option>)}</select><p className="mt-3 text-[10px] leading-4 text-[#7f8da7]">{templates.isLoading?'Loading ideas...':'Make the idea your own before it goes to the group.'}</p></div>
+      {error&&<div role="alert" className="rounded-xl border border-[#d57b7b]/20 bg-[#d57b7b]/[.08] p-3 text-xs text-[#f0aaaa]">{error}</div>}<button className="btn-primary w-full py-3" disabled={create.isPending}>{create.isPending?<><span className="spinner"/>Creating...</>:<><Plus size={15}/>Create challenge</>}</button>
+    </div></form>
+  </div>;
+}
+
+function ChallengeDetailPage() {
+  const params=useParams<{id:string}>();
+  const id=params.id;
+  const q=useGetChallenge(id);
+  const profileQuery=useGetProfile();
+  const groupId=q.data?.challenge.groupId||'';
+  const groupQuery=useGetGroup(groupId,{query:{enabled:!!groupId,queryKey:getGetGroupQueryKey(groupId)}});
+  const start=useStartChallenge();
+  const submit=useSubmitChallenge();
+  const update=useUpdateChallenge();
+  const report=useCreateReport();
+  const qc=useQueryClient();
+  const [answer,setAnswer]=useState('');
+  const [evidence,setEvidence]=useState('');
+  const [reporting,setReporting]=useState(false);
+  const [reportReason,setReportReason]=useState('');
+  const [notice,setNotice]=useState('');
+  const [editing,setEditing]=useState(false);
+  const [editForm,setEditForm]=useState({title:'',instructions:'',category:'social',difficulty:'easy',points:'25',durationMinutes:'30',deadline:'',completionMethod:'text',safetyNotes:''});
+  if(q.isLoading)return <><PageHeading eyebrow="Challenge details" title="Loading quest..." /><SkeletonRows/></>;
+  if(q.isError||!q.data)return <><PageHeading eyebrow="Challenge details" title="That quest isn't available" /><StatusMessage title="We couldn't load this challenge" detail="It may have been removed or your group access has changed." retry={()=>q.refetch()}/></>;
+  const c=q.data.challenge; const Icon=categoryIcon[c.category]||Target; const status=c.status==='cancelled'?'cancelled':q.data.assignment?.status||c.status;
+  const canManage=!!profileQuery.data&&(c.creatorId===profileQuery.data.id||!!groupQuery.data?.members.some(member=>member.id===profileQuery.data?.id&&member.role==='owner'));
+  const startIt=()=>{if(!c.isAssigned)return;start.mutate({challengeId:id},{onSuccess:async()=>{await qc.invalidateQueries({queryKey:getGetChallengeQueryKey(id)});await qc.invalidateQueries({queryKey:getGetDashboardQueryKey()});setNotice('Challenge started. Make it a good one.')},onError:()=>setNotice('Could not start this challenge. Please try again.')})};
+  const submitIt=(e:React.FormEvent)=>{e.preventDefault();if(!c.isAssigned)return;submit.mutate({challengeId:id,data:{answerText:answer||null,evidencePath:evidence||null,confirmComplete:true}},{onSuccess:async()=>{await qc.invalidateQueries({queryKey:getGetChallengeQueryKey(id)});await qc.invalidateQueries({queryKey:getGetDashboardQueryKey()});setNotice('Your completion is in. Your group will review it.')},onError:()=>setNotice('We could not submit your completion. Please try again.')})};
+  const sendReport=(e:React.FormEvent)=>{e.preventDefault();report.mutate({data:{targetType:'challenge',targetId:id,reason:reportReason}},{onSuccess:async()=>{await qc.invalidateQueries({queryKey:getListReportsQueryKey()});setReporting(false);setReportReason('');setNotice('Report received. Thanks for looking out for your group.')},onError:()=>setNotice('Report could not be sent right now.')})};
+  const beginEdit=()=>{setEditForm({title:c.title,instructions:c.instructions,category:c.category,difficulty:c.difficulty,points:String(c.points),durationMinutes:String(c.durationMinutes),deadline:c.deadline?new Date(c.deadline).toISOString().slice(0,16):'',completionMethod:c.completionMethod,safetyNotes:c.safetyNotes||''});setEditing(true)};
+  const saveEdit=(e:React.FormEvent)=>{e.preventDefault();const data:ChallengeUpdate={title:editForm.title.trim(),instructions:editForm.instructions.trim(),category:editForm.category as ChallengeCategory,difficulty:editForm.difficulty as ChallengeDifficulty,points:Number(editForm.points),durationMinutes:Number(editForm.durationMinutes),deadline:editForm.deadline?new Date(editForm.deadline).toISOString():null,completionMethod:editForm.completionMethod as ChallengeUpdate['completionMethod'],safetyNotes:editForm.safetyNotes.trim()||null};update.mutate({challengeId:id,data},{onSuccess:async()=>{await Promise.all([qc.invalidateQueries({queryKey:getGetChallengeQueryKey(id)}),qc.invalidateQueries({queryKey:getListChallengesQueryKey()}),qc.invalidateQueries({queryKey:getGetDashboardQueryKey()})]);setEditing(false);setNotice('Challenge details updated.')},onError:()=>setNotice('Challenge could not be updated. Check the details and try again.')})};
+  const cancelChallenge=()=>{if(!confirm('Cancel this challenge for the group? Participants will no longer be able to submit it.'))return;update.mutate({challengeId:id,data:{cancelled:true}},{onSuccess:async()=>{await Promise.all([qc.invalidateQueries({queryKey:getGetChallengeQueryKey(id)}),qc.invalidateQueries({queryKey:getListChallengesQueryKey()}),qc.invalidateQueries({queryKey:getGetDashboardQueryKey()})]);setNotice('Challenge cancelled.')},onError:()=>setNotice('This challenge could not be cancelled. Try again.')})};
+  const needsAnswer=c.completionMethod!=='confirmation';
+  return <div className="mx-auto max-w-[1000px]"><Link href="/challenges" className="mb-6 inline-flex items-center gap-2 text-xs font-semibold text-[#91a9cc] hover:text-white"><ArrowLeft size={14}/>Challenge board</Link>
+    <div className="grid gap-5 lg:grid-cols-[1fr_330px]"><section className="panel rounded-[24px] p-6 md:p-9"><div className="mb-6 flex flex-wrap items-center justify-between gap-3"><div className="flex flex-wrap items-center gap-2"><div className={cx('flex items-center gap-2 rounded-full px-3 py-2 text-xs font-bold',`category-${c.category}`)}><Icon size={15}/>{categoryNames[c.category]}</div>{!c.isAssigned&&<span className="tag !border-[#d5b56c]/20 !bg-[#d5b56c]/[.07] !text-[#dfc47f]">Not assigned to you</span>}</div><span className="point-chip"><Zap size={13}/>{c.points} pts</span></div>
+      <h1 className="display max-w-3xl text-3xl font-bold leading-tight text-[#eef3fc] md:text-[2.75rem]">{c.title}</h1><div className="mt-4 flex flex-wrap gap-2"><span className="tag capitalize">{c.difficulty}</span><span className="tag"><Clock3 size={12}/>{c.durationMinutes} min</span><span className="tag"><CalendarDays size={12}/>{dateText(c.deadline)}</span><span className="tag">{c.participantCount} participants</span></div>
+      <div className="my-7 border-t divider"/>
+      <div className="eyebrow mb-3">THE CHALLENGE</div><p className="whitespace-pre-line text-sm leading-7 text-[#bfcbdf]">{c.instructions}</p>
+      {c.safetyNotes&&<div className="mt-7 rounded-xl border border-[#80c7a8]/15 bg-[#6ac49d]/[.055] p-4"><div className="mb-2 flex items-center gap-2 text-xs font-bold text-[#a4dec4]"><Shield size={14}/>Keep it comfortable</div><p className="text-xs leading-5 text-[#99b7a8]">{c.safetyNotes}</p></div>}
+      <div className="mt-8 rounded-xl border border-[#92acd8]/10 bg-[#0c1426]/55 p-4"><div className="mb-2 text-xs font-bold">Completion method</div><p className="text-xs leading-5 text-[#8d9bb4]">{c.completionMethod==='confirmation'?'Confirm when you have completed the challenge.':c.completionMethod==='text'?'Share a short written reflection with your submission.':'Add a link or note that helps your group review the completion.'}</p></div>
+      {editing&&<form onSubmit={saveEdit} className="mt-6 space-y-4 rounded-2xl border border-[#8fa9d4]/15 bg-[#0b1427]/55 p-4 md:p-5"><div><div className="eyebrow mb-1">CHALLENGE SETTINGS</div><h2 className="text-sm font-bold">Edit the challenge</h2></div>
+        <div><label className="label">Title</label><input required minLength={3} maxLength={100} className="field" value={editForm.title} onChange={e=>setEditForm({...editForm,title:e.target.value})}/></div>
+        <div><label className="label">Instructions</label><textarea required minLength={10} maxLength={3000} rows={4} className="field resize-y" value={editForm.instructions} onChange={e=>setEditForm({...editForm,instructions:e.target.value})}/></div>
+        <div className="grid gap-3 sm:grid-cols-2"><div><label className="label">Category</label><select className="field" value={editForm.category} onChange={e=>setEditForm({...editForm,category:e.target.value})}>{Object.entries(categoryNames).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></div><div><label className="label">Difficulty</label><select className="field" value={editForm.difficulty} onChange={e=>setEditForm({...editForm,difficulty:e.target.value})}>{['easy','medium','hard'].map(level=><option key={level} value={level}>{level}</option>)}</select></div></div>
+        <div className="grid gap-3 sm:grid-cols-2"><div><label className="label">Points</label><input className="field" type="number" min={5} max={500} required value={editForm.points} onChange={e=>setEditForm({...editForm,points:e.target.value})}/></div><div><label className="label">Duration in minutes</label><input className="field" type="number" min={1} max={1440} required value={editForm.durationMinutes} onChange={e=>setEditForm({...editForm,durationMinutes:e.target.value})}/></div></div>
+        <div className="grid gap-3 sm:grid-cols-2"><div><label className="label">Deadline</label><input className="field" type="datetime-local" value={editForm.deadline} onChange={e=>setEditForm({...editForm,deadline:e.target.value})}/></div><div><label className="label">Completion method</label><select className="field" value={editForm.completionMethod} onChange={e=>setEditForm({...editForm,completionMethod:e.target.value})}><option value="confirmation">Confirmation</option><option value="text">Written reflection</option><option value="evidence">Evidence</option></select></div></div>
+        <div><label className="label">Safety notes</label><textarea className="field resize-y" rows={2} maxLength={500} value={editForm.safetyNotes} onChange={e=>setEditForm({...editForm,safetyNotes:e.target.value})}/></div>
+        <div className="flex flex-wrap justify-end gap-2"><button type="button" className="btn-secondary" onClick={()=>setEditing(false)}>Discard</button><button className="btn-primary" disabled={update.isPending}>{update.isPending?<span className="spinner"/>:<><Check size={14}/>Save challenge</>}</button></div>
+      </form>}
+    </section>
+    <aside className="space-y-4"><div className="panel rounded-2xl p-5">{canManage&&c.status!=='cancelled'&&<div className="mb-5 flex flex-wrap gap-2 border-b border-[#9aafd4]/[.09] pb-4"><button className="btn-secondary flex-1" onClick={beginEdit} disabled={update.isPending}><Settings2 size={13}/>Edit challenge</button><button className="btn-quiet rounded-lg px-2 py-2 text-[10px] font-bold text-[#c38f91] hover:bg-[#d57b7b]/[.08]" onClick={cancelChallenge} disabled={update.isPending}>{update.isPending?'Updating...':'Cancel'}</button></div>}<div className="eyebrow mb-3">YOUR PROGRESS</div><div className="mb-4 flex items-center justify-between"><span className="text-xs capitalize text-[#acbad1]">{status.replace('-', ' ')}</span><span className="mono text-[10px] text-[#7888a2]">{status==='approved'?'Complete':'In the arena'}</span></div><div className="progress-track mb-5"><div className="progress-fill" style={{width:status==='approved'?'100%':status==='submitted'?'80%':status==='in-progress'?'45%':'0%'}}/></div>
+       {!c.isAssigned?<div className="rounded-xl border border-[#d5b56c]/15 bg-[#d5b56c]/[.055] p-3 text-center text-xs leading-5 text-[#d6c48f]">This challenge is open for viewing, but it has not been assigned to you. You cannot start or submit it.</div>:status==='not-started'?<button className="btn-primary w-full" onClick={startIt} disabled={start.isPending}>{start.isPending?<span className="spinner"/>:<><Zap size={14}/>Start this challenge</>}</button>:status==='in-progress'?<form onSubmit={submitIt} className="space-y-3">{needsAnswer&&<div><label className="label">Your completion note</label><textarea required={!evidence} maxLength={3000} rows={4} className="field text-xs" placeholder="What did you do? Share enough for your crew to review." value={answer} onChange={e=>setAnswer(e.target.value)}/></div>}{c.completionMethod==='evidence'&&<div><label className="label">Evidence link or path</label><input className="field text-xs" maxLength={500} placeholder="Paste a link (optional)" value={evidence} onChange={e=>setEvidence(e.target.value)}/></div>}<label className="flex items-start gap-2 text-[10px] leading-4 text-[#8997ae]"><input type="checkbox" required className="mt-0.5"/>I confirm I completed this challenge and followed the group safety notes.</label><button className="btn-primary w-full" disabled={submit.isPending}>{submit.isPending?<span className="spinner"/>:<><Check size={15}/>Submit for review</>}</button></form>:<div className="rounded-xl bg-[#83b99a]/[.08] p-3 text-center text-xs text-[#a8d6bb]">{status==='approved'?'Approved by your crew. Nice work.':status==='submitted'?'Waiting on your group to review.':status==='rejected'?'Review requested an update. Check your group feedback.':`This challenge is ${status}.`}</div>}
+      {notice&&<p role="status" className="mt-3 text-[10px] leading-4 text-[#a7b9d7]">{notice}</p>}</div>
+      <div className="panel rounded-2xl p-5"><div className="eyebrow mb-3">PLAY FAIR</div><p className="text-[11px] leading-5 text-[#8291aa]">Challenges should be voluntary, safe, and kind. Keep personal boundaries ahead of points.</p><Link href="/rules" className="mt-3 inline-flex items-center gap-1 text-[10px] font-bold text-[#9bb9ed]">Read community rules <ArrowRight size={12}/></Link><button className="mt-3 flex items-center gap-2 text-[10px] font-semibold text-[#8795ae] hover:text-[#e0a5a5]" onClick={()=>setReporting(!reporting)}><Flag size={12}/>Report this challenge</button>
+        {reporting&&<form onSubmit={sendReport} className="mt-3 space-y-2"><textarea required minLength={3} maxLength={500} className="field text-xs" rows={3} placeholder="Tell us what's concerning." value={reportReason} onChange={e=>setReportReason(e.target.value)}/><button disabled={report.isPending} className="btn-secondary w-full">{report.isPending?'Sending...':'Send report'}</button></form>}
+      </div>
+      <div className="panel rounded-2xl p-5"><div className="eyebrow mb-3">IN THIS TOGETHER</div>{q.data.participants.length?<div className="space-y-3">{q.data.participants.slice(0,5).map(p=><div key={p.id} className="flex items-center gap-2"><Avatar name={p.displayName} image={p.avatarUrl} size="sm"/><span className="min-w-0 flex-1 truncate text-xs">{p.displayName}</span><span className="mono text-[9px] text-[#8796b1]">{p.points} pts</span></div>)}</div>:<p className="text-xs text-[#8190a9]">No participant details to show.</p>}</div>
+    </aside></div></div>;
+}
+
+function GroupsPage() {
+  const groups=useListGroups();const create=useCreateGroup();const join=useJoinGroup();const qc=useQueryClient();
+  const [mode,setMode]=useState<'create'|'join'>('create');const [name,setName]=useState('');const [description,setDescription]=useState('');const [code,setCode]=useState('');const [error,setError]=useState('');
+  const submit=(e:React.FormEvent)=>{e.preventDefault();setError('');const mutation=mode==='create'?create:join;const data=mode==='create'?{name:name.trim(),description:description.trim()}:{code:code.trim()};mutation.mutate({data} as never,{onSuccess:async()=>{await qc.invalidateQueries({queryKey:getListGroupsQueryKey()});await qc.invalidateQueries({queryKey:getGetDashboardQueryKey()});setName('');setDescription('');setCode('')},onError:()=>setError(mode==='create'?'Could not create this group. Check its name and try again.':'That invitation code could not be used.')});};
+  return <div><PageHeading eyebrow="Your people, your arena" title="Groups" subtitle="Private spaces to make challenges together."/>
+    <div className="mb-6 grid gap-4 lg:grid-cols-[1fr_340px]">
+      <div>{groups.isLoading?<SkeletonRows/>:groups.isError?<StatusMessage title="Groups didn't load" retry={()=>groups.refetch()}/>:groups.data?.length?<div className="grid gap-3 sm:grid-cols-2">{groups.data.map(g=><Link href={`/groups/${g.id}`} key={g.id} className="panel group rounded-2xl p-5 hover:border-[#8eace1]/30" data-testid={`card-group-${g.id}`}><div className="mb-5 flex items-start justify-between"><div className="grid h-11 w-11 place-items-center rounded-xl bg-[#8e78d1]/10 text-[#b3a2ea]"><Users size={19}/></div><ChevronRight className="text-[#7588a8]" size={16}/></div><h3 className="display text-lg font-bold">{g.name}</h3><p className="mt-1 line-clamp-2 min-h-9 text-xs leading-5 text-[#8492ab]">{g.description||'A private space for your crew.'}</p><div className="mt-4 flex items-center justify-between border-t border-[#9aafd4]/[.09] pt-3"><span className="flex items-center gap-1.5 text-[10px] text-[#8492ab]"><Users size={12}/>{g.memberCount} members</span><span className="text-[10px] text-[#70809b]">Created {dateText(g.createdAt)}</span></div></Link>)}</div>:<div className="panel rounded-2xl px-6 py-12 text-center"><Users className="mx-auto mb-3 text-[#9bb9eb]" size={26}/><h2 className="display text-xl font-bold">Your crew starts here</h2><p className="mx-auto mt-2 max-w-sm text-xs leading-5 text-[#8492ab]">Create a private group or join one with an invitation code from a friend.</p></div>}</div>
+      <section className="panel h-fit rounded-2xl p-5"><div className="mb-5 flex rounded-xl bg-[#0d1629] p-1"><button className={cx('flex-1 rounded-lg px-3 py-2 text-xs font-bold',mode==='create'?'bg-[#263653] text-[#e6edf8]':'text-[#8391aa]')} onClick={()=>setMode('create')}>Create group</button><button className={cx('flex-1 rounded-lg px-3 py-2 text-xs font-bold',mode==='join'?'bg-[#263653] text-[#e6edf8]':'text-[#8391aa]')} onClick={()=>setMode('join')}>Join with code</button></div>
+        <form onSubmit={submit} className="space-y-4">{mode==='create'?<><div><label className="label">Group name</label><input className="field" required minLength={2} maxLength={48} placeholder="What does your crew call itself?" value={name} onChange={e=>setName(e.target.value)}/></div><div><label className="label">Description <span className="font-normal text-[#74839e]">(optional)</span></label><textarea className="field resize-y" rows={3} maxLength={240} placeholder="A line about your group." value={description} onChange={e=>setDescription(e.target.value)}/></div></>:<div><label className="label">Invitation code</label><input className="field mono uppercase" required minLength={8} maxLength={32} placeholder="Paste your group's code" value={code} onChange={e=>setCode(e.target.value)}/></div>}
+          {error&&<p role="alert" className="text-xs text-[#eca7a7]">{error}</p>}<button disabled={create.isPending||join.isPending} className="btn-primary w-full">{create.isPending||join.isPending?<span className="spinner"/>:mode==='create'?<><Plus size={14}/>Create private group</>:<><ArrowRight size={14}/>Join group</>}</button></form>
+        <div className="mt-4 flex items-start gap-2 border-t border-[#9aafd4]/[.09] pt-4 text-[10px] leading-4 text-[#7c8ba5]"><LockKeyhole size={13} className="mt-0.5 flex-none"/>Groups are private. You need an invitation code to join one.</div>
+      </section>
+    </div>
+  </div>;
+}
+
+function GroupDetailPage() {
+  const {id=''}=useParams<{id:string}>();const [,setLocation]=useLocation();const q=useGetGroup(id);const update=useUpdateGroup();const invite=useCreateGroupInvitation();const remove=useRemoveGroupMember();const leave=useLeaveGroup();const qc=useQueryClient();
+  const [edit,setEdit]=useState(false);const [name,setName]=useState('');const [description,setDescription]=useState('');const [message,setMessage]=useState('');const [invitation,setInvitation]=useState('');
+  if(q.isLoading)return <><PageHeading eyebrow="Group space" title="Loading group..." /><SkeletonRows/></>;
+  if(q.isError||!q.data)return <><PageHeading eyebrow="Group space" title="Group not available" /><StatusMessage title="We couldn't open this group" detail="Check your invitation or return to groups." retry={()=>q.refetch()}/></>;
+  const d:GroupDetail=q.data;const isOwner=d.members.some(m=>m.role==='owner');
+  const invalidate=()=>Promise.all([qc.invalidateQueries({queryKey:getGetGroupQueryKey(id)}),qc.invalidateQueries({queryKey:getListGroupsQueryKey()})]);
+  const save=(e:React.FormEvent)=>{e.preventDefault();update.mutate({groupId:id,data:{name:name.trim(),description:description.trim()}},{onSuccess:async()=>{await invalidate();setEdit(false);setMessage('Group details saved.')},onError:()=>setMessage('Could not update group settings.')})};
+  const inviteMember=()=>invite.mutate({groupId:id},{onSuccess:async res=>{setInvitation(res.code);setMessage('Invitation code created.');await invalidate()},onError:()=>setMessage('Could not create an invitation.')});
+  const leaveGroup=()=>{if(!confirm('Leave this group? You will need a new invitation to return.'))return;leave.mutate({groupId:id},{onSuccess:async()=>{await invalidate();setLocation('/groups')},onError:()=>setMessage('Could not leave this group.')})};
+  const removeMember=(userId:string)=>{if(!confirm('Remove this member from the group?'))return;remove.mutate({groupId:id,userId},{onSuccess:async()=>{await invalidate();setMessage('Member removed.')},onError:()=>setMessage('Could not remove this member.')})};
+  return <div><Link href="/groups" className="mb-6 inline-flex items-center gap-2 text-xs font-semibold text-[#91a9cc]"><ArrowLeft size={14}/>All groups</Link><PageHeading eyebrow="Private group" title={d.group.name} subtitle={d.group.description||'A private space for your crew.'} action={isOwner?<button className="btn-secondary" onClick={()=>{setName(d.group.name);setDescription(d.group.description||'');setEdit(!edit)}}><Settings2 size={14}/>Group settings</button>:<button className="btn-secondary" onClick={leaveGroup} disabled={leave.isPending}><LogOut size={14}/>Leave group</button>}/>
+    <div className="grid gap-5 lg:grid-cols-[1fr_320px]"><section className="panel rounded-2xl p-5 md:p-6"><div className="mb-5 flex items-center justify-between"><div><div className="eyebrow mb-1">THE CREW</div><h2 className="display text-xl font-bold">{d.members.length} members</h2></div><Users className="text-[#94b5ed]" size={19}/></div>
+      {edit&&isOwner&&<form onSubmit={save} className="mb-5 space-y-3 rounded-xl border border-[#8ea8d3]/15 bg-[#0d1629]/55 p-4"><div><label className="label">Group name</label><input className="field" required minLength={2} maxLength={48} value={name} onChange={e=>setName(e.target.value)}/></div><div><label className="label">Description</label><textarea className="field" maxLength={240} rows={2} value={description} onChange={e=>setDescription(e.target.value)}/></div><div className="flex justify-end gap-2"><button type="button" className="btn-secondary" onClick={()=>setEdit(false)}>Cancel</button><button className="btn-primary" disabled={update.isPending}>Save changes</button></div></form>}
+      <div className="divide-y divide-[#9aafd4]/[.08]">{d.members.map(m=><div key={m.id} className="flex items-center gap-3 py-3"><Avatar name={m.displayName} image={m.avatarUrl}/><div className="min-w-0 flex-1"><div className="truncate text-xs font-bold">{m.displayName}</div><div className="text-[10px] text-[#7988a2]">@{m.username}</div></div><span className="point-chip"><Zap size={10}/>{m.points}</span><span className="tag">{m.role==='owner'?'Owner':'Member'}</span>{isOwner&&m.role!=='owner'&&<button className="btn-quiet p-2 text-[#8e9bb0] hover:text-[#ee9999]" aria-label={`Remove ${m.displayName}`} onClick={()=>removeMember(m.id)}><X size={14}/></button>}</div>)}</div>
+    </section><aside className="space-y-4"><div className="panel rounded-2xl p-5"><div className="eyebrow mb-2">GROUP DETAILS</div><div className="mb-4 flex items-center justify-between text-xs"><span className="text-[#8190aa]">Created</span><span>{dateText(d.group.createdAt)}</span></div><div className="flex items-center justify-between text-xs"><span className="text-[#8190aa]">Visibility</span><span className="flex items-center gap-1.5"><LockKeyhole size={12} className="text-[#9ab9ee]"/>Private</span></div><Link href="/challenges/new" className="btn-primary mt-5 w-full"><Plus size={14}/>Create a group challenge</Link></div>
+      {isOwner&&<div className="panel rounded-2xl p-5"><div className="eyebrow mb-2">GROW YOUR CREW</div><h3 className="text-sm font-bold">Invite a friend</h3><p className="mt-2 text-[10px] leading-4 text-[#8290aa]">Create an invitation code and share it with your group members.</p><button onClick={inviteMember} disabled={invite.isPending} className="btn-secondary mt-4 w-full">{invite.isPending?<span className="spinner"/>:<><Plus size={13}/>Create invitation code</>}</button>{invitation&&<div className="mt-3 rounded-xl border border-[#8fa9d4]/15 bg-[#0b1427] p-3"><div className="eyebrow mb-1">INVITATION CODE</div><div className="flex items-center justify-between gap-2"><code className="mono text-sm text-[#c9d8f1]">{invitation}</code><button className="btn-quiet p-2" aria-label="Copy invitation code" onClick={()=>navigator.clipboard?.writeText(invitation)}><Copy size={14}/></button></div></div>}</div>}
+      {message&&<p role="status" className="rounded-xl bg-[#789ad3]/[.08] p-3 text-xs text-[#a8bbdb]">{message}</p>}
+    </aside></div>
+  </div>;
+}
+
+function ReviewsPage() {
+  const q=useListReviews();const review=useReviewSubmission();const qc=useQueryClient();const [reason,setReason]=useState<Record<string,string>>({});const [notice,setNotice]=useState('');
+  const decide=(submission:Submission,decision:typeof ReviewInputDecision[keyof typeof ReviewInputDecision])=>review.mutate({submissionId:submission.id,data:{decision,...(decision==='rejected'?{reason:reason[submission.id]||'Please add a little more detail so we can review your completion.'}:{})}},{onSuccess:async()=>{await Promise.all([qc.invalidateQueries({queryKey:getListReviewsQueryKey()}),qc.invalidateQueries({queryKey:getGetDashboardQueryKey()}),qc.invalidateQueries({queryKey:getGetLeaderboardQueryKey()}),qc.invalidateQueries({queryKey:getGetProfileQueryKey()})]);setNotice(decision==='approved'?'Completion approved. Points are recorded.':'Feedback sent to the player.')},onError:()=>setNotice('Your review could not be recorded. Try again.')});
+  return <div><PageHeading eyebrow="Your crew needs your call" title="Review queue" subtitle="A thoughtful review earns trust and keeps points meaningful."/>
+    {notice&&<div role="status" className="mb-4 rounded-xl border border-[#8fa9d4]/15 bg-[#789ad3]/[.08] p-3 text-xs text-[#aec1df]">{notice}</div>}
+    {q.isLoading?<SkeletonRows/>:q.isError?<StatusMessage title="Reviews didn't load" detail="We couldn't reach your group's review queue." retry={()=>q.refetch()}/>:q.data?.length?<div className="space-y-4">{q.data.map((item:Submission)=><article className="panel rounded-2xl p-5 md:p-6" key={item.id}><div className="flex flex-wrap items-start justify-between gap-4"><div className="flex items-center gap-3"><Avatar name={item.displayName}/><div><div className="text-sm font-bold">{item.displayName} <span className="font-normal text-[#8190aa]">completed</span></div><div className="mt-1 text-[10px] text-[#7f8da7]">{dateText(item.submittedAt)}</div></div></div><span className="tag capitalize">{item.status.replace('-', ' ')}</span></div><div className="my-4 rounded-xl border border-[#9aafd4]/[.08] bg-[#0c1426]/40 p-4"><div className="eyebrow mb-2">CHALLENGE</div><h3 className="text-sm font-bold">{item.challengeTitle}</h3>{item.answerText&&<p className="mt-3 whitespace-pre-line text-xs leading-5 text-[#9aa9c0]">{item.answerText}</p>}{item.evidencePath&&<a href={item.evidencePath} target="_blank" rel="noreferrer" className="mt-3 inline-block text-xs text-[#98b9ef] underline">Open submitted evidence</a>}</div><label className="label">Feedback if you need a revision <span className="font-normal text-[#7888a2]">(optional for approval)</span></label><textarea className="field mb-4 resize-y text-xs" rows={2} maxLength={500} placeholder="Be specific and kind." value={reason[item.id]||''} onChange={e=>setReason({...reason,[item.id]:e.target.value})}/><div className="flex flex-wrap justify-end gap-2"><button className="btn-secondary" disabled={review.isPending} onClick={()=>decide(item,'rejected')}><ArrowDownRight size={14}/>Request a revision</button><button className="btn-primary" disabled={review.isPending} onClick={()=>decide(item,'approved')}><Check size={14}/>Approve completion</button></div></article>)}</div>:<div className="panel rounded-2xl px-6 py-12 text-center"><BadgeCheck className="mx-auto mb-4 text-[#92b8e9]" size={28}/><h2 className="display text-xl font-bold">You're all caught up</h2><p className="mx-auto mt-2 max-w-md text-xs leading-5 text-[#8391aa]">When your group shares a completion, it'll appear here for a fair review.</p><Link href="/challenges" className="btn-secondary mt-5">Find a challenge</Link></div>}
+  </div>;
+}
+
+function ReportsPage() {
+  const q=useListReports({query:{queryKey:getListReportsQueryKey()}});
+  const review=useReviewReport();
+  const qc=useQueryClient();
+  const [showClosed,setShowClosed]=useState(false);
+  const [notice,setNotice]=useState('');
+  const reports:Report[]=q.data||[];
+  const visible=reports.filter(item=>showClosed||item.status==='pending');
+  const decide=(report:Report,decision:ReportReviewInputDecision)=>review.mutate({reportId:report.id,data:{decision}},{onSuccess:async()=>{await qc.invalidateQueries({queryKey:getListReportsQueryKey()});setNotice(decision==='reviewed'?'Report marked as reviewed.':'Report dismissed.')},onError:()=>setNotice('We could not update this report. Please try again.')});
+  return <div><PageHeading eyebrow="Keep the arena safe" title="Report queue" subtitle="Review reports shared by players or relevant group owners." action={<Link href="/rules" className="btn-secondary"><Shield size={14}/>Community rules</Link>}/>
+    <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div className="text-xs text-[#8492ab]">{reports.filter(item=>item.status==='pending').length} pending report{reports.filter(item=>item.status==='pending').length===1?'':'s'}</div><button className={cx('tag cursor-pointer',showClosed&&'!border-[#8da9dc]/30 !bg-[#8da9dc]/10 !text-[#d4e1f6]')} onClick={()=>setShowClosed(!showClosed)} aria-pressed={showClosed}>{showClosed?'Showing all reports':'Show reviewed and dismissed'}</button></div>
+    {notice&&<div role="status" className="mb-4 rounded-xl border border-[#8fa9d4]/15 bg-[#789ad3]/[.08] p-3 text-xs text-[#aec1df]">{notice}</div>}
+    {q.isLoading?<SkeletonRows/>:q.isError?<StatusMessage title="Reports didn't load" detail="The report queue couldn't be reached." retry={()=>q.refetch()}/>:visible.length?<div className="space-y-3">{visible.map(item=><article key={item.id} className="panel rounded-2xl p-5 md:p-6" data-testid={`report-${item.id}`}>
+      <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="mb-2 flex items-center gap-2"><span className={cx('tag capitalize',item.status==='pending'?'!border-[#d5b56c]/20 !bg-[#d5b56c]/[.08] !text-[#dfc47f]':'')}>{item.status}</span><span className="tag capitalize">{item.targetType}</span></div><h2 className="text-sm font-bold leading-5">{item.reason}</h2></div><span className="mono text-[10px] text-[#7786a0]">{new Date(item.createdAt).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span></div>
+      <div className="mt-4 grid gap-3 rounded-xl border border-[#9aafd4]/[.08] bg-[#0c1426]/40 p-4 sm:grid-cols-2 lg:grid-cols-4"><div><div className="eyebrow mb-1">REPORTER ID</div><div className="mono break-all text-[10px] text-[#aab8cf]">{item.reporterId}</div></div><div><div className="eyebrow mb-1">TARGET ID</div><div className="mono break-all text-[10px] text-[#aab8cf]">{item.targetId}</div></div><div><div className="eyebrow mb-1">REPORT ID</div><div className="mono break-all text-[10px] text-[#aab8cf]">{item.id}</div></div><div><div className="eyebrow mb-1">REVIEW RECORD</div><div className="text-[10px] text-[#aab8cf]">{item.reviewedAt?new Date(item.reviewedAt).toLocaleString():'Not reviewed'}{item.reviewedBy?` · ${item.reviewedBy}`:''}</div></div></div>
+      {item.status==='pending'&&<div className="mt-4 flex flex-wrap justify-end gap-2"><button className="btn-secondary" disabled={review.isPending} onClick={()=>decide(item,'dismissed')}><X size={14}/>Dismiss report</button><button className="btn-primary" disabled={review.isPending} onClick={()=>decide(item,'reviewed')}><Check size={14}/>Mark reviewed</button></div>}
+    </article>)}</div>:<div className="panel rounded-2xl px-6 py-12 text-center"><Shield className="mx-auto mb-4 text-[#91b5e8]" size={28}/><h2 className="display text-xl font-bold">{showClosed?'No reports found':'No open reports'}</h2><p className="mx-auto mt-2 max-w-md text-xs leading-5 text-[#8391aa]">{showClosed?'Reports visible to your account will appear here.':'Nothing is waiting for review. Keep your group kind and your challenges safe.'}</p></div>}
+  </div>;
+}
+
+function LeaderboardPage() {
+  const [window,setWindow]=useState<'weekly'|'all-time'>('weekly');const q=useGetLeaderboard({window},{query:{queryKey:getGetLeaderboardQueryKey({window})}});const entries:LeaderboardEntry[]=q.data||[];
+  return <div><PageHeading eyebrow="Friendly rivalry, good stories" title="Leaderboard" subtitle="A running record of the things your people have done together." action={<select className="field w-[150px]" aria-label="Leaderboard time window" value={window} onChange={e=>setWindow(e.target.value as 'weekly'|'all-time')}><option value="weekly">This week</option><option value="all-time">All time</option></select>}/>
+    {q.isLoading?<SkeletonRows/>:q.isError?<StatusMessage title="Leaderboard didn't load" retry={()=>q.refetch()}/>:entries.length?<><div className="panel mb-5 overflow-hidden rounded-2xl"><div className="grid grid-cols-[42px_1fr_auto] items-center gap-3 border-b border-[#9aafd4]/[.09] px-4 py-3 text-[9px] uppercase tracking-[.13em] text-[#74829c] md:grid-cols-[54px_1fr_120px_120px] md:px-6"><span>Rank</span><span>Player</span><span className="hidden md:block">Challenges</span><span className="text-right">Points</span></div>
+      <div className="divide-y divide-[#9aafd4]/[.08]">{entries.map((entry,i)=><div key={entry.userId} className={cx('grid grid-cols-[42px_1fr_auto] items-center gap-3 px-4 py-4 md:grid-cols-[54px_1fr_120px_120px] md:px-6',i<3&&'bg-[#91b2e8]/[.025]')}><div className={cx('display text-lg font-bold',i===0?'text-[#e6c878]':i===1?'text-[#c4cfe0]':i===2?'text-[#c9997a]':'text-[#7989a4]')}>{String(entry.rank).padStart(2,'0')}</div><div className="flex min-w-0 items-center gap-3"><Avatar name={entry.displayName} image={entry.avatarUrl}/><div className="min-w-0"><div className="truncate text-xs font-bold">{entry.displayName}</div><div className="truncate text-[10px] text-[#74839d]">@{entry.username}</div></div>{i===0&&<span className="tag hidden sm:inline-flex"><Trophy size={10}/>On top</span>}</div><div className="hidden text-xs text-[#8a9ab4] md:block">{entry.completedChallenges} completed</div><div className="text-right"><span className="point-chip"><Zap size={11}/>{entry.points}</span></div></div>)}</div></div><div className="flex items-start gap-2 text-[10px] leading-4 text-[#75839d]"><Shield size={13} className="mt-0.5"/>Points come from completed challenges reviewed by group members.</div></>:<div className="panel rounded-2xl px-6 py-12 text-center"><Trophy className="mx-auto mb-4 text-[#e2be76]" size={28}/><h2 className="display text-xl font-bold">The board is waiting</h2><p className="mx-auto mt-2 max-w-md text-xs leading-5 text-[#8391aa]">Complete a challenge with your group and the first points will land here.</p></div>}
+  </div>;
+}
+
+function ProfilePage() {
+  const q=useGetProfile();const update=useUpdateProfile();const qc=useQueryClient();const [form,setForm]=useState({username:'',displayName:'',avatarUrl:''});const [initialized,setInitialized]=useState(false);const [message,setMessage]=useState('');
+  useEffect(()=>{if(q.data&&!initialized){setForm({username:q.data.username,displayName:q.data.displayName,avatarUrl:q.data.avatarUrl||''});setInitialized(true)}},[q.data,initialized]);
+  const submit=(e:React.FormEvent)=>{e.preventDefault();update.mutate({data:{username:form.username,displayName:form.displayName,avatarUrl:form.avatarUrl||null}},{onSuccess:async()=>{await qc.invalidateQueries({queryKey:getGetProfileQueryKey()});await qc.invalidateQueries({queryKey:getGetDashboardQueryKey()});setMessage('Your profile has been updated.')},onError:()=>setMessage('Profile update failed. Check your username and try again.')})};
+  return <div className="mx-auto max-w-[900px]"><PageHeading eyebrow="Your identity in the arena" title="Profile & settings" subtitle="Keep your name and profile details up to date."/>
+    {q.isLoading?<SkeletonRows/>:q.isError?<StatusMessage title="Profile didn't load" retry={()=>q.refetch()}/>:q.data?<div className="grid gap-5 lg:grid-cols-[300px_1fr]"><section className="panel h-fit rounded-2xl p-6 text-center"><Avatar name={q.data.displayName} image={q.data.avatarUrl} size="lg"/><h2 className="display mt-4 text-xl font-bold">{q.data.displayName}</h2><p className="text-xs text-[#8190a9]">@{q.data.username}</p><div className="mt-6 grid grid-cols-2 gap-2"><div className="rounded-xl bg-[#0b1426]/60 p-3"><div className="display text-xl font-bold">{q.data.points}</div><div className="mt-1 text-[9px] text-[#8090aa]">points</div></div><div className="rounded-xl bg-[#0b1426]/60 p-3"><div className="display text-xl font-bold">{q.data.completedChallenges}</div><div className="mt-1 text-[9px] text-[#8090aa]">completions</div></div></div><div className="mt-3 rounded-xl bg-[#0b1426]/60 p-3"><div className="display text-xl font-bold">{q.data.groupsCount}</div><div className="mt-1 text-[9px] text-[#8090aa]">groups</div></div></section>
+    <form onSubmit={submit} className="panel space-y-5 rounded-2xl p-5 md:p-7"><div><div className="eyebrow mb-1">PUBLIC PROFILE</div><h2 className="display text-lg font-bold">Profile details</h2></div><div><label className="label">Display name</label><input className="field" required minLength={1} maxLength={48} value={form.displayName} onChange={e=>setForm({...form,displayName:e.target.value})}/></div><div><label className="label">Username</label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-[#7887a0]">@</span><input className="field pl-8" required minLength={3} maxLength={24} pattern="[a-zA-Z0-9_]+" value={form.username} onChange={e=>setForm({...form,username:e.target.value})}/></div><p className="mt-1.5 text-[10px] text-[#7786a0]">Letters, numbers, and underscores only.</p></div><div><label className="label">Avatar image URL <span className="font-normal text-[#7887a0]">(optional)</span></label><input className="field" type="url" maxLength={500} placeholder="https://..." value={form.avatarUrl} onChange={e=>setForm({...form,avatarUrl:e.target.value})}/></div>{message&&<div role="status" className="text-xs text-[#9fc6ac]">{message}</div>}<div className="flex justify-end"><button className="btn-primary" disabled={update.isPending}>{update.isPending?<span className="spinner"/>:<><Check size={14}/>Save profile</>}</button></div></form>
+    </div>:null}
+  </div>;
+}
+
+function RulesPage() {
+  const queryClient=useQueryClient();
+  const [reporting,setReporting]=useState(false);const [targetType,setTargetType]=useState<'user'|'challenge'|'submission'>('user');const [targetId,setTargetId]=useState('');const [reason,setReason]=useState('');const [message,setMessage]=useState('');const report=useCreateReport();
+  const submit=(e:React.FormEvent)=>{e.preventDefault();report.mutate({data:{targetType,targetId,reason}},{onSuccess:async()=>{await queryClient.invalidateQueries({queryKey:getListReportsQueryKey()});setMessage('Your report has been sent to the moderation team.');setReporting(false);setTargetId('');setReason('')},onError:()=>setMessage('We could not send the report right now. Please try again.')})};
+  const rules=[{i:Handshake,title:'Choose challenges together',body:'Make challenges voluntary, clear, and right for the people in your group. Nobody owes the group a yes.'},{i:Shield,title:'Safety comes before points',body:'No dangerous, illegal, humiliating, invasive, or coercive challenges. Do not ask someone to share private information or put themselves at risk.'},{i:BadgeCheck,title:'Review with care',body:'Approve only completions that meet the challenge. If something is unclear, ask for a revision with specific, kind feedback.'},{i:LockKeyhole,title:'Respect privacy',body:'Groups are private spaces. Do not share another member’s submissions, photos, or personal details outside the group without their permission.'},{i:Flag,title:'Report what feels wrong',body:'Use reporting to flag unsafe challenges, inappropriate submissions, or behavior that breaks these rules. Reports are reviewed by the moderation team.'}];
+  return <div className="mx-auto max-w-[900px]"><PageHeading eyebrow="A good arena takes care" title="Community rules" subtitle="A few shared boundaries make the fun possible." action={<button onClick={()=>setReporting(!reporting)} className="btn-secondary"><Flag size={14}/>Report something</button>}/>
+    {message&&<div role="status" className="mb-4 rounded-xl border border-[#8fa9d4]/15 bg-[#789ad3]/[.08] p-3 text-xs text-[#aec1df]">{message}</div>}
+    {reporting&&<form onSubmit={submit} className="panel mb-5 space-y-4 rounded-2xl p-5"><div className="flex items-start justify-between"><div><div className="eyebrow mb-1">PRIVATE REPORT</div><h2 className="text-sm font-bold">Tell us what happened</h2></div><button type="button" className="btn-quiet p-1" aria-label="Close report form" onClick={()=>setReporting(false)}><X size={17}/></button></div><div className="grid gap-3 sm:grid-cols-2"><div><label className="label">What are you reporting?</label><select className="field" value={targetType} onChange={e=>setTargetType(e.target.value as typeof targetType)}><option value="user">A person</option><option value="challenge">A challenge</option><option value="submission">A submission</option></select></div><div><label className="label">Reference ID</label><input required className="field" placeholder="ID of the person or item" value={targetId} onChange={e=>setTargetId(e.target.value)}/></div></div><div><label className="label">What concerns you?</label><textarea required minLength={3} maxLength={500} rows={3} className="field" placeholder="Share the details needed to review this." value={reason} onChange={e=>setReason(e.target.value)}/></div><button disabled={report.isPending} className="btn-primary">{report.isPending?'Sending...':'Send private report'}</button></form>}
+    <div className="mb-5 panel rounded-2xl border-l-2 border-l-[#8ab2eb] p-5 md:p-6"><div className="eyebrow mb-2">THE SHORT VERSION</div><p className="display text-xl font-bold leading-snug text-[#e8effb] md:text-2xl">Play with your friends. Never at their expense.</p><p className="mt-3 max-w-2xl text-xs leading-6 text-[#8b9ab3]">Sidequest is for creating memories together. Keep every challenge safe, consensual, and grounded in trust.</p></div>
+    <div className="space-y-3">{rules.map((rule,i)=>{const Icon=rule.i;return <article key={rule.title} className="panel flex gap-4 rounded-2xl p-5"><div className="grid h-10 w-10 flex-none place-items-center rounded-xl bg-[#86a8e4]/10 text-[#a3c0f0]"><Icon size={18}/></div><div><div className="eyebrow mb-1">0{i+1}</div><h2 className="text-sm font-bold">{rule.title}</h2><p className="mt-2 text-xs leading-5 text-[#8a99b2]">{rule.body}</p></div></article>})}</div>
+    <div className="mt-5 rounded-2xl border border-[#83bfa5]/15 bg-[#6ac49d]/[.045] p-5"><div className="mb-2 flex items-center gap-2 text-sm font-bold text-[#a8d9bf]"><Shield size={15}/>Privacy, by design</div><p className="text-xs leading-5 text-[#8eaa9b]">Your groups and activity are intended for your invited crew. Only share what you are comfortable sharing, and ask before posting anything that includes someone else.</p></div>
+  </div>;
+}
+
+function AuthPage({ type }: { type: 'login'|'signup'|'recover' }) {
+  const [,setLocation]=useLocation();const [email,setEmail]=useState('');const [password,setPassword]=useState('');const [displayName,setDisplayName]=useState('');const [error,setError]=useState('');const [success,setSuccess]=useState('');const [busy,setBusy]=useState(false);
+  const heading=type==='login'?'Welcome back':type==='signup'?'Build your arena':'Find your way back';
+  const subtitle=type==='login'?'Your group has been keeping score.':type==='signup'?'Set up your profile and invite your crew.':'We’ll send a recovery link to your inbox.';
+  const submit=async(e:React.FormEvent)=>{e.preventDefault();setError('');setSuccess('');if(!supabase){setError('Authentication is not configured yet. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to continue.');return}setBusy(true);
+    try{if(type==='login'){const{error:err}=await supabase.auth.signInWithPassword({email,password});if(err)throw err;setLocation('/dashboard')}
+      else if(type==='signup'){const{error:err}=await supabase.auth.signUp({email,password,options:{data:{display_name:displayName}}});if(err)throw err;setSuccess('Account created. Check your email to confirm your address, then log in.')}
+      else{const{error:err}=await supabase.auth.resetPasswordForEmail(email,{redirectTo:`${window.location.origin}/auth/login`});if(err)throw err;setSuccess('If an account exists for this email, a recovery link is on its way.')}
+    }catch(err){setError(err instanceof Error?err.message:'Authentication could not be completed.')}finally{setBusy(false)}
+  };
+  return <div className="grid min-h-[100dvh] lg:grid-cols-[.9fr_1.1fr]"><section className="relative hidden overflow-hidden border-r border-[#9aafd4]/[.08] bg-[#111a2d]/70 p-12 lg:flex lg:flex-col lg:justify-between"><div className="absolute inset-0 hero-orbit opacity-60"/><Link href="/" className="relative z-10 flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-[#80a8e9]/10 text-[#a4c4f4]"><Swords size={20}/></span><span className="display text-lg font-bold">sidequest</span></Link><div className="relative z-10 max-w-[520px]"><div className="eyebrow mb-4">GOOD THINGS HAPPEN IN GROUPS</div><p className="display text-5xl font-bold leading-[1.08] text-[#edf3fc]">The little things<br/>become the stories.</p><p className="mt-5 max-w-md text-sm leading-6 text-[#95a4be]">Create challenges, cheer your friends on, and keep the receipts for all the fun you had together.</p></div><div className="relative z-10 text-[10px] text-[#73819b]">Private by default. Better together.</div></section>
+    <div className="flex min-h-[100dvh] items-center justify-center px-5 py-10"><div className="w-full max-w-[420px]"><Link href="/" className="mb-10 inline-flex items-center gap-2 text-xs font-semibold text-[#8da3c5]"><ArrowLeft size={14}/>Back to Sidequest</Link><div className="eyebrow mb-2">{type==='signup'?'YOUR CREW IS ONE STEP AWAY':type==='recover'?'ACCOUNT RECOVERY':'YOUR ARENA AWAITS'}</div><h1 className="display text-3xl font-bold text-[#edf3fc]">{heading}</h1><p className="mt-2 text-sm text-[#8795ae]">{subtitle}</p>
+      {authNotConfigured&&<div role="status" className="mt-5 rounded-xl border border-[#d4ae6e]/20 bg-[#d4ae6e]/[.07] p-3 text-[11px] leading-5 text-[#d7c293]">Supabase auth is waiting for its project configuration.</div>}
+      <form onSubmit={submit} className="mt-7 space-y-4">{type==='signup'&&<div><label className="label">Display name</label><input className="field" required minLength={1} maxLength={48} placeholder="How your friends know you" value={displayName} onChange={e=>setDisplayName(e.target.value)}/></div>}<div><label className="label">Email</label><input type="email" className="field" required autoComplete="email" placeholder="you@campus.edu" value={email} onChange={e=>setEmail(e.target.value)}/></div>{type!=='recover'&&<div><div className="mb-1 flex justify-between"><label className="label !mb-0">Password</label>{type==='login'&&<Link href="/auth/recover" className="text-[10px] font-semibold text-[#98b7ea]">Forgot password?</Link>}</div><input type="password" className="field" required minLength={type==='signup'?8:1} autoComplete={type==='login'?'current-password':'new-password'} placeholder={type==='signup'?'At least 8 characters':'Your password'} value={password} onChange={e=>setPassword(e.target.value)}/></div>}
+        {error&&<div role="alert" className="rounded-xl border border-[#d57b7b]/20 bg-[#d57b7b]/[.08] p-3 text-xs leading-5 text-[#eca8a8]">{error}</div>}{success&&<div role="status" className="rounded-xl border border-[#83bfa5]/15 bg-[#6ac49d]/[.07] p-3 text-xs leading-5 text-[#a5d9bc]">{success}</div>}
+        <button className="btn-primary w-full py-3" disabled={busy}>{busy?<span className="spinner"/>:type==='login'?<><LogIn size={15}/>Log in</>:type==='signup'?<><Sparkles size={15}/>Create account</>:<><ArrowRight size={15}/>Send recovery link</>}</button>
+      </form><div className="mt-6 text-center text-xs text-[#8190aa]">{type==='login'?<>New to Sidequest? <Link href="/auth/signup" className="font-bold text-[#a2c1f1]">Create an account</Link></>:type==='signup'?<>Already in? <Link href="/auth/login" className="font-bold text-[#a2c1f1]">Log in</Link></>:<>Remembered it? <Link href="/auth/login" className="font-bold text-[#a2c1f1]">Return to login</Link></>}</div>
+    </div></div>
+  </div>;
+}
+
+function AuthRedirect() {
+  const [,setLocation]=useLocation();
+  const signOut=async()=>{if(supabase)await supabase.auth.signOut();setLocation('/')};
+  return <div className="panel mx-auto max-w-xl rounded-2xl p-8 text-center"><LogOut size={25} className="mx-auto mb-4 text-[#a8b9d5]"/><h1 className="display text-2xl font-bold">Sign out of Sidequest?</h1><p className="mt-2 text-xs text-[#8795ae]">Your progress stays with your account.</p><button className="btn-primary mt-5" onClick={signOut}>Sign out</button></div>;
+}
+
+function RouteView() {
+  return <Switch>
+    <Route path="/" component={Landing}/>
+    <Route path="/auth/login">{()=> <AuthPage type="login"/>}</Route>
+    <Route path="/auth/signup">{()=> <AuthPage type="signup"/>}</Route>
+    <Route path="/auth/recover">{()=> <AuthPage type="recover"/>}</Route>
+    <Route path="/dashboard">{()=> <AppShell><Dashboard/></AppShell>}</Route>
+    <Route path="/challenges">{()=> <AppShell><ChallengesPage/></AppShell>}</Route>
+    <Route path="/challenges/new">{()=> <AppShell><ChallengeCreate/></AppShell>}</Route>
+    <Route path="/challenges/:id">{()=> <AppShell><ChallengeDetailPage/></AppShell>}</Route>
+    <Route path="/groups">{()=> <AppShell><GroupsPage/></AppShell>}</Route>
+    <Route path="/groups/:id">{()=> <AppShell><GroupDetailPage/></AppShell>}</Route>
+    <Route path="/reviews">{()=> <AppShell><ReviewsPage/></AppShell>}</Route>
+    <Route path="/reports">{()=> <AppShell><ReportsPage/></AppShell>}</Route>
+    <Route path="/leaderboard">{()=> <AppShell><LeaderboardPage/></AppShell>}</Route>
+    <Route path="/profile">{()=> <AppShell><ProfilePage/></AppShell>}</Route>
+    <Route path="/rules">{()=> <AppShell><RulesPage/></AppShell>}</Route>
+    <Route path="/auth/logout">{()=> <AppShell><AuthRedirect/></AppShell>}</Route>
+    <Route component={NotFound}/>
+  </Switch>;
 }
 
 function App() {
-  return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-          <Router />
-        </WouterRouter>
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
-  );
+  return <QueryClientProvider client={queryClient}><RouteView/></QueryClientProvider>;
 }
 
 export default App;

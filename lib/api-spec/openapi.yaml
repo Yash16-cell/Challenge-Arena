@@ -3,20 +3,21 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Challenge Arena user-scoped Supabase API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: arena
+    description: Challenge Arena operations
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,13 +25,647 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /arena/dashboard:
+    get:
+      operationId: getDashboard
+      tags: [arena]
+      summary: Get signed-in user's dashboard
+      responses:
+        "200":
+          description: Dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dashboard"
+  /arena/challenges:
+    get:
+      operationId: listChallenges
+      tags: [arena]
+      summary: Search and filter accessible challenges
+      parameters:
+        - in: query
+          name: groupId
+          schema: { type: string, format: uuid }
+        - in: query
+          name: category
+          schema: { $ref: "#/components/schemas/ChallengeCategory" }
+        - in: query
+          name: difficulty
+          schema: { $ref: "#/components/schemas/ChallengeDifficulty" }
+        - in: query
+          name: status
+          schema: { $ref: "#/components/schemas/ChallengeStatus" }
+        - in: query
+          name: search
+          schema: { type: string, maxLength: 80 }
+        - in: query
+          name: template
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Challenges visible to the current user
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Challenge" }
+    post:
+      operationId: createChallenge
+      tags: [arena]
+      summary: Create and assign a group challenge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChallengeInput" }
+      responses:
+        "201":
+          description: Challenge created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Challenge" }
+  /arena/challenges/{challengeId}:
+    get:
+      operationId: getChallenge
+      tags: [arena]
+      summary: Get challenge details visible to the current user
+      parameters:
+        - $ref: "#/components/parameters/ChallengeId"
+      responses:
+        "200":
+          description: Challenge details
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChallengeDetail" }
+    patch:
+      operationId: updateChallenge
+      tags: [arena]
+      summary: Update or cancel a challenge as creator or group owner
+      parameters:
+        - $ref: "#/components/parameters/ChallengeId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChallengeUpdate" }
+      responses:
+        "200":
+          description: Updated challenge
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Challenge" }
+  /arena/challenges/{challengeId}/start:
+    post:
+      operationId: startChallenge
+      tags: [arena]
+      summary: Mark an assigned challenge as in progress
+      parameters:
+        - $ref: "#/components/parameters/ChallengeId"
+      responses:
+        "200":
+          description: Assignment updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Assignment" }
+  /arena/challenges/{challengeId}/submit:
+    post:
+      operationId: submitChallenge
+      tags: [arena]
+      summary: Submit a challenge completion
+      parameters:
+        - $ref: "#/components/parameters/ChallengeId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubmissionInput" }
+      responses:
+        "201":
+          description: Submission recorded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Submission" }
+  /arena/challenge-templates:
+    get:
+      operationId: listChallengeTemplates
+      tags: [arena]
+      summary: Get the original sample challenge library
+      responses:
+        "200":
+          description: Available challenge templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ChallengeTemplate" }
+  /arena/groups:
+    get:
+      operationId: listGroups
+      tags: [arena]
+      summary: List groups the current user belongs to
+      responses:
+        "200":
+          description: Member groups
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Group" }
+    post:
+      operationId: createGroup
+      tags: [arena]
+      summary: Create a private group
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GroupInput" }
+      responses:
+        "201":
+          description: Group created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Group" }
+  /arena/groups/join:
+    post:
+      operationId: joinGroup
+      tags: [arena]
+      summary: Join a private group using its invitation code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GroupJoinInput" }
+      responses:
+        "200":
+          description: Joined group
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Group" }
+  /arena/groups/{groupId}:
+    get:
+      operationId: getGroup
+      tags: [arena]
+      summary: Get private group details and members
+      parameters:
+        - $ref: "#/components/parameters/GroupId"
+      responses:
+        "200":
+          description: Group details
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GroupDetail" }
+    patch:
+      operationId: updateGroup
+      tags: [arena]
+      summary: Update group settings as owner
+      parameters:
+        - $ref: "#/components/parameters/GroupId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GroupUpdate" }
+      responses:
+        "200":
+          description: Updated group
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Group" }
+  /arena/groups/{groupId}/invite:
+    post:
+      operationId: createGroupInvitation
+      tags: [arena]
+      summary: Create an invitation as group owner
+      parameters:
+        - $ref: "#/components/parameters/GroupId"
+      responses:
+        "201":
+          description: Invitation created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invitation" }
+  /arena/groups/{groupId}/members/{userId}:
+    delete:
+      operationId: removeGroupMember
+      tags: [arena]
+      summary: Remove a member as group owner
+      parameters:
+        - $ref: "#/components/parameters/GroupId"
+        - in: path
+          name: userId
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Member removed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActionResult" }
+  /arena/groups/{groupId}/membership:
+    delete:
+      operationId: leaveGroup
+      tags: [arena]
+      summary: Leave a group
+      parameters:
+        - $ref: "#/components/parameters/GroupId"
+      responses:
+        "200":
+          description: Membership ended
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActionResult" }
+  /arena/reviews:
+    get:
+      operationId: listReviews
+      tags: [arena]
+      summary: List submissions the current user may review
+      responses:
+        "200":
+          description: Review queue
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Submission" }
+  /arena/submissions/{submissionId}/review:
+    post:
+      operationId: reviewSubmission
+      tags: [arena]
+      summary: Approve or reject a submission
+      parameters:
+        - in: path
+          name: submissionId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewInput" }
+      responses:
+        "200":
+          description: Review completed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Submission" }
+  /arena/leaderboard:
+    get:
+      operationId: getLeaderboard
+      tags: [arena]
+      summary: Get an all-time or weekly leaderboard
+      parameters:
+        - in: query
+          name: groupId
+          schema: { type: string, format: uuid }
+        - in: query
+          name: window
+          schema:
+            type: string
+            enum: [weekly, all-time]
+            default: all-time
+      responses:
+        "200":
+          description: Ranked members
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LeaderboardEntry" }
+  /arena/profile:
+    get:
+      operationId: getProfile
+      tags: [arena]
+      summary: Get the current user's profile and stats
+      responses:
+        "200":
+          description: Profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+    patch:
+      operationId: updateProfile
+      tags: [arena]
+      summary: Update editable profile fields
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProfileUpdate" }
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+  /arena/reports:
+    get:
+      operationId: listReports
+      tags: [arena]
+      summary: List reports visible to the signed-in reporter or relevant group owner
+      responses:
+        "200":
+          description: Reports the current user may access
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Report" }
+    post:
+      operationId: createReport
+      tags: [arena]
+      summary: Report a challenge or submission
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReportInput" }
+      responses:
+        "201":
+          description: Report recorded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActionResult" }
+  /arena/reports/{reportId}/review:
+    post:
+      operationId: reviewReport
+      tags: [arena]
+      summary: Mark a report reviewed or dismissed as a relevant group owner
+      parameters:
+        - in: path
+          name: reportId
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReportReviewInput" }
+      responses:
+        "200":
+          description: Report review recorded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Report" }
 components:
+  parameters:
+    ChallengeId:
+      in: path
+      name: challengeId
+      required: true
+      schema: { type: string, format: uuid }
+    GroupId:
+      in: path
+      name: groupId
+      required: true
+      schema: { type: string, format: uuid }
   schemas:
     HealthStatus:
       type: object
       properties:
-        status:
-          type: string
-      required:
-        - status
-
+        status: { type: string }
+      required: [status]
+    ChallengeCategory:
+      type: string
+      enum: [brain, physical, problem-solving, creativity, social]
+    ChallengeDifficulty:
+      type: string
+      enum: [easy, medium, hard]
+    ChallengeStatus:
+      type: string
+      enum: [not-started, in-progress, submitted, approved, rejected, expired, cancelled]
+    Profile:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        displayName: { type: string }
+        avatarUrl: { type: ["string", "null"] }
+        points: { type: integer }
+        completedChallenges: { type: integer }
+        groupsCount: { type: integer }
+      required: [id, username, displayName, points, completedChallenges, groupsCount]
+    ProfileUpdate:
+      type: object
+      properties:
+        username: { type: string, minLength: 3, maxLength: 24, pattern: "^[a-zA-Z0-9_]+$" }
+        displayName: { type: string, minLength: 1, maxLength: 48 }
+        avatarUrl: { type: ["string", "null"], maxLength: 500 }
+    Group:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: ["string", "null"] }
+        ownerId: { type: string, format: uuid }
+        memberCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+      required: [id, name, ownerId, memberCount, createdAt]
+    GroupInput:
+      type: object
+      properties:
+        name: { type: string, minLength: 2, maxLength: 48 }
+        description: { type: string, maxLength: 240 }
+      required: [name]
+    GroupUpdate:
+      type: object
+      properties:
+        name: { type: string, minLength: 2, maxLength: 48 }
+        description: { type: ["string", "null"], maxLength: 240 }
+    GroupJoinInput:
+      type: object
+      properties:
+        code: { type: string, minLength: 8, maxLength: 32 }
+      required: [code]
+    GroupMember:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        displayName: { type: string }
+        avatarUrl: { type: ["string", "null"] }
+        role: { type: string, enum: [owner, member] }
+        points: { type: integer }
+      required: [id, username, displayName, role, points]
+    GroupDetail:
+      type: object
+      properties:
+        group: { $ref: "#/components/schemas/Group" }
+        members:
+          type: array
+          items: { $ref: "#/components/schemas/GroupMember" }
+        inviteCode: { type: ["string", "null"] }
+      required: [group, members]
+    Invitation:
+      type: object
+      properties:
+        code: { type: string }
+        expiresAt: { type: string, format: date-time }
+      required: [code, expiresAt]
+    Challenge:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        groupId: { type: ["string", "null"], format: uuid }
+        creatorId: { type: ["string", "null"], format: uuid }
+        title: { type: string }
+        instructions: { type: string }
+        category: { $ref: "#/components/schemas/ChallengeCategory" }
+        difficulty: { $ref: "#/components/schemas/ChallengeDifficulty" }
+        points: { type: integer }
+        durationMinutes: { type: integer }
+        completionMethod: { type: string, enum: [confirmation, text, evidence] }
+        safetyNotes: { type: ["string", "null"] }
+        deadline: { type: ["string", "null"], format: date-time }
+        status: { $ref: "#/components/schemas/ChallengeStatus" }
+        isTemplate: { type: boolean }
+        isAssigned: { type: boolean }
+        maxAttempts: { type: integer }
+        participantCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+      required: [id, title, instructions, category, difficulty, points, durationMinutes, completionMethod, status, isTemplate, isAssigned, participantCount, createdAt]
+    ChallengeDetail:
+      type: object
+      properties:
+        challenge: { $ref: "#/components/schemas/Challenge" }
+        assignment: { $ref: "#/components/schemas/Assignment" }
+        participants:
+          type: array
+          items: { $ref: "#/components/schemas/GroupMember" }
+      required: [challenge, participants]
+    ChallengeTemplate:
+      allOf:
+        - $ref: "#/components/schemas/Challenge"
+    ChallengeInput:
+      type: object
+      properties:
+        groupId: { type: string, format: uuid }
+        title: { type: string, minLength: 3, maxLength: 100 }
+        instructions: { type: string, minLength: 10, maxLength: 3000 }
+        category: { $ref: "#/components/schemas/ChallengeCategory" }
+        difficulty: { $ref: "#/components/schemas/ChallengeDifficulty" }
+        points: { type: integer, minimum: 5, maximum: 500 }
+        durationMinutes: { type: integer, minimum: 1, maximum: 1440 }
+        deadline: { type: ["string", "null"], format: date-time }
+        completionMethod: { type: string, enum: [confirmation, text, evidence] }
+        safetyNotes: { type: string, maxLength: 500 }
+        maxAttempts: { type: integer, minimum: 1, maximum: 10, default: 3 }
+        participantIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, format: uuid }
+      required: [groupId, title, instructions, category, difficulty, points, durationMinutes, completionMethod, participantIds]
+    ChallengeUpdate:
+      type: object
+      properties:
+        title: { type: string, minLength: 3, maxLength: 100 }
+        instructions: { type: string, minLength: 10, maxLength: 3000 }
+        category: { $ref: "#/components/schemas/ChallengeCategory" }
+        difficulty: { $ref: "#/components/schemas/ChallengeDifficulty" }
+        points: { type: integer, minimum: 5, maximum: 500 }
+        durationMinutes: { type: integer, minimum: 1, maximum: 1440 }
+        deadline: { type: ["string", "null"], format: date-time }
+        completionMethod: { type: string, enum: [confirmation, text, evidence] }
+        safetyNotes: { type: ["string", "null"], maxLength: 500 }
+        maxAttempts: { type: integer, minimum: 1, maximum: 10 }
+        cancelled: { type: boolean }
+      minProperties: 1
+    Assignment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        challengeId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/ChallengeStatus" }
+        updatedAt: { type: string, format: date-time }
+      required: [id, challengeId, userId, status, updatedAt]
+    Submission:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        challengeId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        username: { type: string }
+        displayName: { type: string }
+        challengeTitle: { type: string }
+        answerText: { type: ["string", "null"] }
+        evidencePath: { type: ["string", "null"] }
+        status: { $ref: "#/components/schemas/ChallengeStatus" }
+        reviewReason: { type: ["string", "null"] }
+        submittedAt: { type: string, format: date-time }
+      required: [id, challengeId, userId, username, displayName, challengeTitle, status, submittedAt]
+    SubmissionInput:
+      type: object
+      properties:
+        answerText: { type: ["string", "null"], maxLength: 3000 }
+        evidencePath: { type: ["string", "null"], maxLength: 500 }
+        confirmComplete: { type: boolean }
+      required: [confirmComplete]
+    ReviewInput:
+      type: object
+      properties:
+        decision: { type: string, enum: [approved, rejected] }
+        reason: { type: string, maxLength: 500 }
+      required: [decision]
+    LeaderboardEntry:
+      type: object
+      properties:
+        rank: { type: integer }
+        userId: { type: string, format: uuid }
+        username: { type: string }
+        displayName: { type: string }
+        avatarUrl: { type: ["string", "null"] }
+        points: { type: integer }
+        completedChallenges: { type: integer }
+      required: [rank, userId, username, displayName, points, completedChallenges]
+    Dashboard:
+      type: object
+      properties:
+        profile: { $ref: "#/components/schemas/Profile" }
+        challenges:
+          type: array
+          items: { $ref: "#/components/schemas/Challenge" }
+        groups:
+          type: array
+          items: { $ref: "#/components/schemas/Group" }
+        pendingReviews: { type: integer }
+        weeklyPoints: { type: integer }
+        recentActivity:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      required: [profile, challenges, groups, pendingReviews, weeklyPoints, recentActivity]
+    ReportInput:
+      type: object
+      properties:
+        targetType: { type: string, enum: [challenge, submission, user] }
+        targetId: { type: string, format: uuid }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+      required: [targetType, targetId, reason]
+    ReportReviewInput:
+      type: object
+      properties:
+        decision: { type: string, enum: [reviewed, dismissed] }
+      required: [decision]
+    Report:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        reporterId: { type: string, format: uuid }
+        targetType: { type: string, enum: [challenge, submission, user] }
+        targetId: { type: string, format: uuid }
+        reason: { type: string }
+        status: { type: string, enum: [pending, reviewed, dismissed] }
+        createdAt: { type: string, format: date-time }
+        reviewedAt: { type: ["string", "null"], format: date-time }
+        reviewedBy: { type: ["string", "null"], format: uuid }
+      required: [id, reporterId, targetType, targetId, reason, status, createdAt]
+    ActionResult:
+      type: object
+      properties:
+        ok: { type: boolean }
+        id: { type: ["string", "null"], format: uuid }
+        message: { type: ["string", "null"] }
+      required: [ok]
