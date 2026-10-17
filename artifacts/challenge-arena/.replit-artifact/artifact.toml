@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Challenge Arena"
+description = "A mobile-first college-friends challenge platform for creating group challenges, submitting completions, earning points, and competing on trusted leaderboards."
+version = "1.0.0"
+id = "artifacts/challenge-arena"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25841
+
+[services.development]
+run = "pnpm --filter @workspace/challenge-arena run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/challenge-arena", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/challenge-arena/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25841"
+BASE_PATH = "/"
